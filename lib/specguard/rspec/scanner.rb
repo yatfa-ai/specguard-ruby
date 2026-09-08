@@ -196,12 +196,21 @@ module SpecGuard
       #        permits. This path reports nothing and exits 0; the backend
       #        reports a parse failure and exits 1.
       #
-      # RATIFIED, and the reason is scope rather than preference. This gem's
-      # hand-rolled validation logic is slated for REMOVAL by the roadmap that
-      # owns the binary, not for repair; and closing the gap here would be a
-      # change to the DEFAULT path, which the slice that introduced
-      # `ValidatorBackend` explicitly holds fixed. Whoever removes this parser
-      # closes it by deletion.
+      # RATIFIED, and the reason is scope rather than preference.
+      # `specguard-lint` validates through the `validate-intent` binary and
+      # only the binary, so closing a gap here would be a change to the
+      # DEFAULT path, which the slice that introduced `ValidatorBackend`
+      # explicitly holds fixed.
+      #
+      # RETAINED by design, not awaiting deletion. SPGD-96 — the roadmap that
+      # owned the binary, and the remover this comment once pointed at —
+      # completed 2026-09-06, having carried out the removal it could: the
+      # schema-application arm, gone in `c9dca61` ({Linter}'s header records
+      # the survivor shape). This input half survived that cutover on purpose:
+      # {Scanner.scan_text} is the formatter's `ValidatorError` rescue path
+      # ({AnnotationLookup}) and the engine of the suite's validator stub
+      # (`spec/support/validator_stub.rb`), and `parse` is its per-token step —
+      # removing it would rewrite discovery, not delete dead code.
       #
       # Asserted from both sides — what this parser accepts, the convergence,
       # and both surviving divergences — in
