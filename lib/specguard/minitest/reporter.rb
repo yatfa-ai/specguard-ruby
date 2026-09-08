@@ -69,6 +69,13 @@ module SpecGuard
         end
       end
 
+      # Internal, never on the wire: `record` stashes the result's own method
+      # name under this key so `uniquify_ids!` can re-identify colliding rows
+      # at delivery time, and `uniquify_ids!` strips it again before the
+      # payload is built. The underscore prefix exists so a leak onto the
+      # wire would be loud in any payload diff rather than plausible.
+      RESULT_NAME_KEY = "_specguard_result_name"
+
       def initialize(configuration: SpecGuard::RSpec.configuration,
                      transport: nil, output: $stderr,
                      annotations: SpecGuard::RSpec::AnnotationLookup.new,
@@ -104,7 +111,12 @@ module SpecGuard
       # exit code.
       def record(result)
         row = row_for(result)
-        @rows << row if row
+        return unless row
+
+        # Stashed for `uniquify_ids!` (and stripped there) — the one
+        # unique-per-result token a Minitest row has. See that method.
+        row[RESULT_NAME_KEY] = result.name.to_s
+        @rows << row
       rescue ScriptError, StandardError
         nil
       end
@@ -115,6 +127,7 @@ module SpecGuard
       def report
         return if @rows.empty?
 
+        uniquify_ids!
         deliver(payload)
       rescue ScriptError, StandardError => e
         warn_once("could not ship test telemetry (#{e.class}: #{e.message}). The test run is unaffected.")
@@ -128,6 +141,35 @@ module SpecGuard
       end
 
       private
+
+      # The definition site is NOT unique per result for a generated test:
+      # `define_method("test_x_#{param}")` in a loop (or any
+      # generate_tests-style helper) stamps every instance with the SAME
+      # `source_location` — the define_method call site — so N results share
+      # one id, and the platform's ingest upserts
+      # `unique_by %i[test_run_id example_id]` silently drops every repeat
+      # but the first, taking each dropped row's outcome and duration with
+      # it. `@rows` is complete here — every `record` has returned, and
+      # parallel mode records from forked workers through this one shared
+      # reporter — so the collision is detectable exactly once, at delivery.
+      # Every member of a colliding group is re-identified as
+      # `"#{file}:#{line}##{method_name}"`: a method name is unique per
+      # class and deterministic, so the suffixed ids are stable across runs.
+      # ALL members take the suffix, never just later arrivals — parallel
+      # mode's arrival order is fork scheduling, so "the first row keeps the
+      # bare id" would make identity depend on it. Rows whose id no other
+      # row claims — every plain `def test_` suite among them — keep the id
+      # they always had, byte for byte.
+      def uniquify_ids!
+        counts = Hash.new(0)
+        @rows.each { |row| counts[row["id"]] += 1 }
+        @rows.each do |row|
+          name = row.delete(RESULT_NAME_KEY)
+          next unless counts[row["id"]] > 1 && !name.to_s.empty?
+
+          row["id"] = "#{row["id"]}##{name}"
+        end
+      end
 
       # The envelope, in the platform's own field names (`Ingest::Payload`:
       # commit_sha / branch / ci_run_id / duration_seconds / specs) — the same
@@ -201,9 +243,14 @@ module SpecGuard
         intent = annotation_for(file, line_number)
         {
           # Minitest has no RSpec-style rerun path or nested ids, so the
-          # definition site is the identity: stable across runs (which is
-          # what the platform's per-test identity needs) and unique per
-          # definition (which is what a row needs).
+          # definition site is the row's id — the run-local primary key for
+          # this one delivered payload, never a cross-run stable identity
+          # (cross-run matching remains name + file, the platform's own
+          # rule). A definition site is NOT unique per result:
+          # `define_method`-generated tests stamp every instance with the
+          # same location, so rows can collide on this id within a run, and
+          # `uniquify_ids!` is what re-identifies those rows at delivery
+          # time. Nothing here promises uniqueness it does not have.
           "id" => "#{file}:#{line}",
           "spec_file_path" => file,
           "file_path" => file,

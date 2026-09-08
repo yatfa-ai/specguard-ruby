@@ -130,6 +130,98 @@ module SpecGuard
         end
       end
 
+      describe "generated-test identity" do
+        # A `define_method("test_x_#{param}")` loop gives every generated
+        # test the SAME source_location — the define_method call site — so
+        # their definition-site ids collide, and the platform's ingest
+        # upserts unique_by %i[test_run_id example_id]: every repeat but the
+        # first is silently dropped at ingest, taking its outcome and
+        # duration with it. The family must arrive as one row per result,
+        # failures included, and the plain result next to it must keep the
+        # id it always had.
+        # @intent: { entity: "Minitest Reporter", action: "unique ids for generated tests", behavior: "three define_method results sharing one definition site each get a per-result id while a plain result keeps its bare definition-site id", layer: "unit" }
+        it "gives each result of a define_method family its own id and leaves plain rows byte-identical" do
+          transport, captured = recording_transport
+          reporter = Reporter.new(configuration: configuration(base_env),
+                                  transport: transport, output: StringIO.new)
+          family = %w[test_prices_eur_at_10 test_prices_usd_at_20 test_prices_gbp_at_30]
+          family.each_with_index do |name, i|
+            reporter.record(result(i.even? ? :assertion_failed : :passed,
+                                   name: name,
+                                   location: ["#{Reporter.repo_root}/spec/pricing_test.rb", 7]))
+          end
+          reporter.record(result(:passed))
+          reporter.report
+
+          rows = captured.call["specs"]
+          expect(rows.map { |row| row["id"] }).to contain_exactly(
+            "spec/pricing_test.rb:7#test_prices_eur_at_10",
+            "spec/pricing_test.rb:7#test_prices_usd_at_20",
+            "spec/pricing_test.rb:7#test_prices_gbp_at_30",
+            "spec/foo_test.rb:12"
+          )
+          # The point of the fix, restated as data: the two failures are
+          # rows of their own, not collapsed into the family's first member.
+          expect(rows.count { |row| row["outcome"] == "failed" }).to eq(2)
+          # Whatever identity bookkeeping the collision repair does, none of
+          # it may leak onto the wire: the nine-key contract holds for the
+          # suffixed rows exactly as for every other.
+          expect(rows.map { |row| row.keys })
+            .to all(contain_exactly("id", "spec_file_path", "file_path", "line_number",
+                                    "name", "duration", "outcome", "status", "intent"))
+        end
+
+        # Parallel mode records from forked workers through this one shared
+        # reporter in nondeterministic order, so "the first arrival keeps the
+        # bare id" would make identity depend on fork scheduling. Every
+        # member of a colliding group gets the suffix, so the delivered ids
+        # are the same set whatever order the results arrive in — which is
+        # also why two runs of the same suite produce the same ids.
+        # @intent: { entity: "Minitest Reporter", action: "keep generated ids arrival-order independent", behavior: "the same colliding family recorded in reverse arrival order yields the identical set of delivered ids", layer: "unit" }
+        it "delivers the same id set whatever order a colliding family arrives in" do
+          ids_for = lambda do |names|
+            transport, captured = recording_transport
+            reporter = Reporter.new(configuration: configuration(base_env),
+                                    transport: transport, output: StringIO.new)
+            names.each do |name|
+              reporter.record(result(:passed, name: name,
+                                              location: ["#{Reporter.repo_root}/spec/pricing_test.rb", 7]))
+            end
+            reporter.report
+            captured.call["specs"].map { |row| [row["name"], row["id"]] }.sort
+          end
+
+          family = %w[test_prices_eur_at_10 test_prices_usd_at_20 test_prices_gbp_at_30]
+          expect(ids_for.call(family)).to eq(ids_for.call(family.reverse))
+        end
+
+        # The platform's upsert key is run-global, so ids must be distinct
+        # ACROSS the shards of one run, not merely within one payload. A
+        # family split so that two members share a shard collides there and
+        # is suffixed; the lone member in the other shard keeps the bare id
+        # — which the suffixed ids cannot equal — so the three still land as
+        # three distinct tests of the run.
+        # @intent: { entity: "Minitest Reporter", action: "unique ids across shards", behavior: "a generated family split across two shard payloads still yields one distinct id per result", layer: "unit" }
+        it "keeps a shard-split generated family one distinct id per result" do
+          run_shard = lambda do |names|
+            transport, captured = recording_transport
+            reporter = Reporter.new(configuration: configuration(base_env),
+                                    transport: transport, output: StringIO.new)
+            names.each do |name|
+              reporter.record(result(:passed, name: name,
+                                              location: ["#{Reporter.repo_root}/spec/pricing_test.rb", 7]))
+            end
+            reporter.report
+            captured.call["specs"].map { |row| row["id"] }
+          end
+
+          shard_one = run_shard.call(%w[test_prices_eur_at_10 test_prices_usd_at_20])
+          shard_two = run_shard.call(%w[test_prices_gbp_at_30])
+
+          expect((shard_one + shard_two).uniq.length).to eq(3)
+        end
+      end
+
       describe "annotations" do
         # The real lookup against the real offline validator stub — not a
         # double — because what is under test is precisely the delegation:

@@ -33,7 +33,9 @@ The plugin rides alongside Minitest's own reporters (the suite's output is uncha
 envelope per process with the same field names the RSpec formatter sends, and never fails the run:
 a refused or unreachable delivery costs one line on stderr and a line in the local sink. Without
 `SPECGUARD_API_KEY` nothing is sent — the run is appended to the local development record, exactly
-as the RSpec formatter behaves. For a deterministic CI attachment where plugin discovery must not
+as the RSpec formatter behaves. Parameterized tests — the `define_method("test_x_#{param}")` loop
+idiom — ship one row per instance, not one row per definition site, so each instance's outcome and
+duration are tracked on their own. For a deterministic CI attachment where plugin discovery must not
 be assumed, require it explicitly before the run:
 
 ```bash
