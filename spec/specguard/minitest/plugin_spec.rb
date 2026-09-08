@@ -109,10 +109,11 @@ RSpec.describe "the minitest plugin" do
         _out, err, status = Open3.capture3(
           child_env,
           RbConfig.ruby, "-I", LIB,
-          # Order matters: minitest first, the plugin second. Minitest's own
-          # discovery always loads plugins after minitest itself; loading the
-          # plugin file first would open a bare `module Minitest` with nothing
-          # in it, and the `-e` below would speak to that shell of a module.
+          # Order matters: minitest first, the plugin second. The plugin
+          # requires "minitest" itself (so loading it alone is safe — pinned
+          # by the README-shape example below), but `-rminitest` first stays
+          # the conservative order this E2E keeps: Minitest's own discovery
+          # always loads plugins after minitest itself.
           "-rminitest", "-rminitest/specguard_plugin",
           "-e", 'Minitest.extensions << "specguard"; load ARGV[0]',
           FIXTURE
@@ -169,5 +170,24 @@ RSpec.describe "the minitest plugin" do
       "-e", 'puts Gem.find_files("minitest/*_plugin.rb")'
     )
     expect(out).to include("specguard_plugin.rb")
+  end
+
+  # @intent: { entity: "minitest plugin", action: "attach with no minitest preloaded", behavior: "requiring minitest/specguard_plugin alone — the README's deterministic attachment shape, deliberately without -rminitest — registers the specguard plugin on the real Minitest module", layer: "integration" }
+  it "registers the plugin under the README's deterministic command, without minitest preloaded" do
+    # The README hands CI operators `-rminitest/specguard_plugin` followed by
+    # `Minitest.extensions << "specguard"` in `-e`. Without the plugin's own
+    # `require "minitest"` that one-liner spoke to a bare `module Minitest`
+    # stub and died with NoMethodError; this pins the fixed behavior at the
+    # exact command shape an operator copies — no `-rminitest` first, on
+    # purpose.
+    out, err, status = Open3.capture3(
+      ENV.to_h.except("RUBYOPT", "BUNDLE_GEMFILE", "BUNDLER_VERSION", "RUBYLIB"),
+      RbConfig.ruby, "-I", LIB,
+      "-rminitest/specguard_plugin",
+      "-e", 'Minitest.extensions << "specguard"; puts Minitest.extensions.include?("specguard")'
+    )
+    expect(status.exitstatus).to eq(0)
+    expect(out.strip).to eq("true")
+    expect(err).not_to include("NoMethodError")
   end
 end

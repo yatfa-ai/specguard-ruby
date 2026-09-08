@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# May be required before minitest (the README's `-rminitest/specguard_plugin` path):
+# load real minitest, never a bare stub — under discovery the require is a no-op.
+require "minitest"
+
 # Minitest's plugin discovery point. Minitest loads every `minitest/*_plugin.rb`
 # it can find on the load path (`Minitest.load_plugins` → `Gem.find_files`), so
 # a gem providing this file needs no require in the consumer's spec files —
