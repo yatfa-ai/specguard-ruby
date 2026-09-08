@@ -1444,10 +1444,16 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   #   * the nesting BOUNDARY sits a little deeper in Ruby than §1.1(c)'s 100.
   #
   # Both are the gem's hand-rolled parser being looser than the specification.
-  # Neither is closed here: that logic is slated for REMOVAL by this roadmap
-  # rather than repair, and every way to close it is a change to the DEFAULT
-  # path, which this backend's slice holds fixed. Documented and pinned instead,
-  # so whoever removes it knows what they are removing.
+  # Neither is closed here, and this parse half is not an oversight awaiting a
+  # remover: it is RETAINED by design — `Scanner#scan_text` is the formatter's
+  # `ValidatorError` rescue path (`AnnotationLookup`) and the validator stub's
+  # engine (`spec/support/validator_stub.rb`) — and every way to close the
+  # difference is a change to the DEFAULT path, which this backend's slice
+  # holds fixed. Documented and pinned instead, so nobody reads the gap as
+  # drift: the roadmap that owned the binary (SPGD-96) completed 2026-09-06,
+  # having removed the schema-application arm it could remove (`c9dca61`; see
+  # the header of `lib/specguard/rspec/linter.rb` for the survivor shape), and
+  # this input half is what survived that cutover on purpose.
   describe "the JSON acceptance set" do
     def parses?(doc)
       JSON.parse(doc)
