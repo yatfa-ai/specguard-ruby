@@ -171,7 +171,7 @@ module SpecGuard
                                     "name", "duration", "outcome", "status", "intent"))
         end
 
-        # Parallel mode records from forked workers through this one shared
+        # Parallel mode records from its worker threads through this one shared
         # reporter in nondeterministic order, so "the first arrival keeps the
         # bare id" would make identity depend on fork scheduling. Every
         # member of a colliding group gets the suffix, so the delivered ids

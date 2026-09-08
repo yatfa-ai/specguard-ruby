@@ -150,7 +150,7 @@ module SpecGuard
       # `unique_by %i[test_run_id example_id]` silently drops every repeat
       # but the first, taking each dropped row's outcome and duration with
       # it. `@rows` is complete here — every `record` has returned, and
-      # parallel mode records from forked workers through this one shared
+      # parallel mode records from its worker threads through this one shared
       # reporter — so the collision is detectable exactly once, at delivery.
       # Every member of a colliding group is re-identified as
       # `"#{file}:#{line}##{method_name}"`: a method name is unique per
