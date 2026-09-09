@@ -69,13 +69,6 @@ module SpecGuard
         end
       end
 
-      # Internal, never on the wire: `record` stashes the result's own method
-      # name under this key so `uniquify_ids!` can re-identify colliding rows
-      # at delivery time, and `uniquify_ids!` strips it again before the
-      # payload is built. The underscore prefix exists so a leak onto the
-      # wire would be loud in any payload diff rather than plausible.
-      RESULT_NAME_KEY = "_specguard_result_name"
-
       def initialize(configuration: SpecGuard::RSpec.configuration,
                      transport: nil, output: $stderr,
                      annotations: SpecGuard::RSpec::AnnotationLookup.new,
@@ -113,9 +106,6 @@ module SpecGuard
         row = row_for(result)
         return unless row
 
-        # Stashed for `uniquify_ids!` (and stripped there) — the one
-        # unique-per-result token a Minitest row has. See that method.
-        row[RESULT_NAME_KEY] = result.name.to_s
         @rows << row
       rescue ScriptError, StandardError
         nil
@@ -153,21 +143,32 @@ module SpecGuard
       # parallel mode records from its worker threads through this one shared
       # reporter — so the collision is detectable exactly once, at delivery.
       # Every member of a colliding group is re-identified as
-      # `"#{file}:#{line}##{method_name}"`: a method name is unique per
-      # class and deterministic, so the suffixed ids are stable across runs.
-      # ALL members take the suffix, never just later arrivals — parallel
+      # `"#{file}:#{line}##{Klass#method_name}"`, suffixed with the row's own
+      # class-qualified wire `name` — not the bare method name, which stops
+      # distinguishing results the moment TWO classes share one `define_method`
+      # call site (Rails' declarative `test "desc"` helper is exactly that
+      # shape: one `define_method` inside activesupport, shared by every test
+      # class in the suite) and generate identically-named methods. The
+      # class-qualified name is unique per result and deterministic, so the
+      # suffixed ids are stable across runs. The token is read straight off
+      # the row rather than stashed at `record` time: `row["name"]` already IS
+      # `"#{result.klass}##{result.name}"`, so a sidecar would be a
+      # byte-identical copy of a value already on the wire — redundant state
+      # and one more thing that could leak. ALL members take the suffix,
+      # never just later arrivals — parallel
       # mode's arrival order is fork scheduling, so "the first row keeps the
       # bare id" would make identity depend on it. Rows whose id no other
       # row claims — every plain `def test_` suite among them — keep the id
-      # they always had, byte for byte.
+      # they always had, byte for byte. The id remains the run-local primary
+      # key for one delivered payload and never a cross-run stable identity:
+      # cross-run matching remains name + file, the platform's own rule.
       def uniquify_ids!
         counts = Hash.new(0)
         @rows.each { |row| counts[row["id"]] += 1 }
         @rows.each do |row|
-          name = row.delete(RESULT_NAME_KEY)
-          next unless counts[row["id"]] > 1 && !name.to_s.empty?
+          next unless counts[row["id"]] > 1
 
-          row["id"] = "#{row["id"]}##{name}"
+          row["id"] = "#{row["id"]}##{row["name"]}"
         end
       end
 

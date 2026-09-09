@@ -137,7 +137,9 @@ module SpecGuard
         # upserts unique_by %i[test_run_id example_id]: every repeat but the
         # first is silently dropped at ingest, taking its outcome and
         # duration with it. The family must arrive as one row per result,
-        # failures included, and the plain result next to it must keep the
+        # failures included, suffixed with the CLASS-QUALIFIED name so the
+        # suffix keeps distinguishing even when two classes share one call
+        # site (SPGD-1013), and the plain result next to it must keep the
         # id it always had.
         # @intent: { entity: "Minitest Reporter", action: "unique ids for generated tests", behavior: "three define_method results sharing one definition site each get a per-result id while a plain result keeps its bare definition-site id", layer: "unit" }
         it "gives each result of a define_method family its own id and leaves plain rows byte-identical" do
@@ -155,9 +157,9 @@ module SpecGuard
 
           rows = captured.call["specs"]
           expect(rows.map { |row| row["id"] }).to contain_exactly(
-            "spec/pricing_test.rb:7#test_prices_eur_at_10",
-            "spec/pricing_test.rb:7#test_prices_usd_at_20",
-            "spec/pricing_test.rb:7#test_prices_gbp_at_30",
+            "spec/pricing_test.rb:7#FooTest#test_prices_eur_at_10",
+            "spec/pricing_test.rb:7#FooTest#test_prices_usd_at_20",
+            "spec/pricing_test.rb:7#FooTest#test_prices_gbp_at_30",
             "spec/foo_test.rb:12"
           )
           # The point of the fix, restated as data: the two failures are
@@ -169,6 +171,39 @@ module SpecGuard
           expect(rows.map { |row| row.keys })
             .to all(contain_exactly("id", "spec_file_path", "file_path", "line_number",
                                     "name", "duration", "outcome", "status", "intent"))
+        end
+
+        # The residual SPGD-995 deliberately left, closed by SPGD-1013: a
+        # bare-method-name suffix still collides when TWO classes share ONE
+        # `define_method` call site and generate identically-named methods —
+        # Rails' declarative `test "desc"` helper is exactly that shape (one
+        # call site inside activesupport, descriptions like "valid"/"invalid"
+        # repeating across test files), so every such pair in a run merged
+        # into one ingested row and the second row's outcome and duration
+        # vanished at ingest. The suffix is the class-qualified wire name, so
+        # `ATest#test_valid` and `BTest#test_valid` land as two distinct ids
+        # and BOTH failures survive the upsert.
+        # @intent: { entity: "Minitest Reporter", action: "suffix collisions class-qualified", behavior: "two classes sharing one definition site with identical method names deliver two rows carrying two distinct class-qualified suffixed ids", layer: "unit" }
+        it "keeps same-named generated tests of two classes distinct when they share one definition site" do
+          transport, captured = recording_transport
+          reporter = Reporter.new(configuration: configuration(base_env),
+                                  transport: transport, output: StringIO.new)
+          %w[ATest BTest].each do |klass|
+            reporter.record(result(:assertion_failed, klass: klass, name: "test_valid",
+                                                   location: ["#{Reporter.repo_root}/spec/residual_test.rb", 13]))
+          end
+          reporter.report
+
+          rows = captured.call["specs"]
+          expect(rows.length).to eq(2)
+          expect(rows.map { |row| row["id"] }).to contain_exactly(
+            "spec/residual_test.rb:13#ATest#test_valid",
+            "spec/residual_test.rb:13#BTest#test_valid"
+          )
+          # The failure is the point: each class runs a failing generated
+          # test, and each failure must arrive as a row the ingest upsert
+          # keeps — not collapsed into the other class's row.
+          expect(rows.count { |row| row["outcome"] == "failed" }).to eq(2)
         end
 
         # Parallel mode records from its worker threads through this one shared
