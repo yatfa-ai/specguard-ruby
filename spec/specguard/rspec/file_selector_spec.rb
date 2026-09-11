@@ -463,5 +463,160 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
         expect(stats.spec_matches).to eq(0)
       end
     end
+
+    # SPGD-1035: shallow checkouts. A depth-1 CI clone (the `actions/checkout@v4`
+    # default) cannot answer the merge-base question — the merge base with the
+    # default branch is not in its history — so the derived base is HEAD itself,
+    # and the pre-shallow notes misattributed that to a "default-branch build".
+    # The notes must tell the shallow story and name the remedy; non-shallow
+    # output keeps its exact former text.
+    describe "shallow checkouts" do
+      # A depth-1 clone of a committed fixture — the default shallow CI shape:
+      # `.git/shallow` present, the merge base with the default branch outside
+      # the clone's history. The `file://` URL forces the smart transport: git
+      # WARNS and IGNORES `--depth` on a plain local path (a local clone is
+      # always full).
+      def shallow_clone_of(src, dst)
+        git("clone", "-q", "--depth", "1", "file://#{src}", dst, chdir: root)
+        git("config", "user.email", "test@example.com", chdir: dst)
+        git("config", "user.name", "Test", chdir: dst)
+      end
+
+      # Returns `[source, shallow]`: the source keeps living after the clone,
+      # which is how a base sha the checkout cannot contain is manufactured.
+      def init_shallow_repo
+        src = File.join(root, "source")
+        FileUtils.mkdir_p(src)
+        init_repo(src)
+        write(src, "spec/order_spec.rb")
+        commit(src, "base")
+        # The source needs history for depth 1 to CUT: git writes the
+        # `.git/shallow` marker only when the clone actually truncates, so a
+        # one-commit source yields a full clone that is not shallow at all.
+        write(src, "HISTORY.md", "# history filler so a depth-1 clone truncates\n")
+        commit(src, "second commit — the depth cut")
+        dst = File.join(root, "shallow")
+        shallow_clone_of(src, dst)
+        [src, dst]
+      end
+
+      # @intent: { entity: "FileSelector", action: "explain a thin selection", behavior: "in a depth-1 clone the empty-selection note names the checkout as shallow with the remedy, never the default-branch-build guess", layer: "unit" }
+      it "names the checkout as shallow in the empty-selection note, with the remedy, never 'default-branch build'" do
+        _src, dst = init_shallow_repo
+
+        # Precondition: the fixture is what it claims.
+        shallow, = Open3.capture2("git", "rev-parse", "--is-shallow-repository", chdir: dst)
+        expect(shallow.strip).to eq("true")
+
+        selection = described_class.select(changed: true, root: dst)
+
+        expect(selection).to be_empty
+        expect(selection.note).to include("shallow (depth-limited) clone")
+        expect(selection.note).to include("not in its history")
+        expect(selection.note).to include("fetch-depth: 0")
+        expect(selection.note).to include("--changed=<base>")
+        expect(selection.note).not_to include("default-branch build")
+      end
+
+      # The second thin shape: no default-branch ref resolvable, base falls
+      # back to HEAD — shallowness changes that note's story too, and the
+      # "default-branch build" guess must not ride either shape.
+      # @intent: { entity: "FileSelector", action: "explain a thin selection", behavior: "the head-fallback note in a depth-1 clone tells the shallow story and names the remedy, never the default-branch-build guess", layer: "unit" }
+      it "tells the shallow story in the head-fallback note too, never 'default-branch build'" do
+        _src, dst = init_shallow_repo
+        # Strip every ref a DEFAULT_BRANCH_REFS probe could resolve — the
+        # clone's remote-tracking refs AND its own local `main` (the probes
+        # include the local names) — so the base falls back to HEAD.
+        git("checkout", "--detach", chdir: dst)
+        git("update-ref", "-d", "refs/remotes/origin/HEAD", chdir: dst)
+        git("update-ref", "-d", "refs/remotes/origin/main", chdir: dst)
+        git("branch", "-D", "main", chdir: dst)
+        File.write(File.join(dst, "spec/order_spec.rb"), "# edited\n")
+
+        selection = described_class.select(changed: true, root: dst)
+
+        expect(selection.files).to eq(["spec/order_spec.rb"])
+        expect(selection.base).to eq(Open3.capture2("git", "rev-parse", "HEAD", chdir: dst).first.strip)
+        expect(selection.note).to include("shallow (depth-limited) clone")
+        expect(selection.note).to include("no default-branch ref")
+        expect(selection.note).to include("fell back to HEAD")
+        expect(selection.note).to include("fetch-depth: 0")
+        expect(selection.note).not_to include("default-branch build")
+      end
+
+      # @intent: { entity: "FileSelector", action: "explain a thin selection", behavior: "an explicit base absent from a depth-1 clone's history raises the typed usage error naming the shallow cause and the fetch remedy", layer: "unit" }
+      it "names the shallow cause and remedy when the explicit base is not in the clone's history" do
+        src, dst = init_shallow_repo
+        # A commit made in the source AFTER the clone: the depth-1 clone cannot
+        # contain it, which is exactly what a stale/pinned base sha is in CI.
+        write(src, "spec/later_spec.rb")
+        commit(src, "later commit")
+        absent_sha, = Open3.capture2("git", "rev-parse", "HEAD", chdir: src)
+        absent_sha = absent_sha.strip
+
+        messages = []
+        expect {
+          described_class.select(changed: true, base: absent_sha, root: dst)
+        }.to raise_error(SpecGuard::RSpec::UsageError) { |e| messages << e.message }
+
+        expect(messages).to eq(
+          ["--changed could not diff against \"#{absent_sha}\": this checkout is shallow and " \
+           "\"#{absent_sha}\" is not in its history — fetch it (fetch-depth: 0, or " \
+           "git fetch origin #{absent_sha}) or pass a base the checkout contains"]
+        )
+      end
+
+      # The remedy the note names must actually work: a base the checkout does
+      # contain selects normally and is not a thin base.
+      # @intent: { entity: "FileSelector", action: "explain a thin selection", behavior: "an explicit base the depth-1 clone contains selects normally and carries no thin-selection note", layer: "unit" }
+      it "selects normally with an explicit base the checkout contains, and carries no note" do
+        _src, dst = init_shallow_repo
+        File.write(File.join(dst, "spec/order_spec.rb"), "# edited\n")
+        tip, = Open3.capture2("git", "rev-parse", "HEAD", chdir: dst)
+
+        selection = described_class.select(changed: true, base: tip.strip, root: dst)
+
+        expect(selection.files).to eq(["spec/order_spec.rb"])
+        expect(selection.note).to be_nil
+      end
+
+      # The byte-identity lock: none of the shallow branches may disturb the
+      # messages a full clone already emitted. Pinned EXACT (not by substring)
+      # so any wording drift anywhere in the non-shallow text fails here.
+      # @intent: { entity: "FileSelector", action: "explain a thin selection", behavior: "on a full clone the thin-base notes and the diff-failure error keep their exact pre-shallow text", layer: "unit" }
+      it "keeps the exact pre-shallow note and error text on a full clone" do
+        # merge_base == HEAD, NOT shallow: the "default-branch build" note is exact.
+        init_repo(root)
+        write(root, "spec/order_spec.rb")
+        commit(root, "base")
+
+        expect(described_class.select(changed: true, root: root).note).to eq(
+          "the diff base is HEAD itself (this looks like a default-branch build), " \
+          "so only uncommitted changes can be selected"
+        )
+
+        # head_fallback, NOT shallow: exact.
+        fallback = File.join(root, "fallback")
+        FileUtils.mkdir_p(fallback)
+        init_repo(fallback)
+        git("checkout", "-q", "-b", "wip", chdir: fallback)
+        write(fallback, "spec/order_spec.rb")
+        commit(fallback, "base")
+
+        expect(described_class.select(changed: true, root: fallback).note).to eq(
+          "no default-branch ref (#{described_class::DEFAULT_BRANCH_REFS.join(', ')}) could be found, " \
+          "so the diff base fell back to HEAD; --changed can only select uncommitted changes here"
+        )
+
+        # A diff failure in a NON-shallow repo keeps the bare message, byte-identical.
+        absent = "0" * 40
+        messages = []
+        expect {
+          described_class.select(changed: true, base: absent, root: root)
+        }.to raise_error(SpecGuard::RSpec::UsageError) { |e| messages << e.message }
+
+        expect(messages).to eq([%(--changed could not diff against "#{absent}")])
+      end
+    end
   end
 end

@@ -43,6 +43,16 @@ module SpecGuard
     # There is no diff base that makes "what changed on this build" non-empty
     # there.
     #
+    # A **shallow** checkout — the depth-1 clone CI defaults to
+    # (`actions/checkout@v4`) — reaches the same thin base by a third road the
+    # ref-resolution above cannot see: every `DEFAULT_BRANCH_REFS` probe
+    # *resolves* (the fetched tip is in the clone), but the history behind it
+    # is not, so the merge base with the default branch is outside the clone
+    # and `merge-base` collapses onto HEAD. The notes below therefore consult
+    # `git rev-parse --is-shallow-repository` — lazily and memoized, only
+    # where the answer changes the message — and in a shallow clone say that,
+    # never "default-branch build".
+    #
     # That is why the load-bearing requirement is the **loud empty selection**,
     # not the base. The caller must never be unable to tell "checked 12 files,
     # found no annotations" from "checked 0 files" — {Selection} carries the
@@ -157,17 +167,21 @@ module SpecGuard
                 "and no HEAD commit); pass --changed=<base> explicitly"
         end
 
-        files, stats = changed_files(resolved, root)
+        # One memoized probe per run, shared by the two message branches that
+        # consult it (a failed diff, a thin base note).
+        is_shallow = shallow_probe(root)
+
+        files, stats = changed_files(resolved, root, is_shallow)
 
         Selection.new(files: files, mode: :changed, base: resolved,
-                      note: base_note(resolved, base_kind, root), stats: stats)
+                      note: base_note(resolved, base_kind, root, is_shallow), stats: stats)
       end
 
       # Resolves git's repo-root-relative output into paths relative to `root`,
       # dropping (and counting) everything the two scoping rules exclude.
       # @return [[Array<String>, Stats]]
-      def changed_files(base, root)
-        names = diff_names(base, root)
+      def changed_files(base, root, is_shallow)
+        names = diff_names(base, root, is_shallow)
         specs = names.select { |name| CHANGED_PATTERNS.any? { |pattern| File.fnmatch?(pattern, name) } }
 
         top = toplevel(root)
@@ -198,9 +212,23 @@ module SpecGuard
       # them, and they then fail to open. `-z` makes the output machine-readable:
       # NUL-separated and never `core.quotePath`-quoted, so a non-ASCII path
       # survives intact and a path containing a newline cannot split a record.
-      def diff_names(base, root)
+      def diff_names(base, root, is_shallow)
         out, ok = git(%W[diff -z --name-only --diff-filter=d #{base} --], root)
-        raise UsageError, "--changed could not diff against #{base.inspect}" unless ok
+        unless ok
+          if is_shallow.call
+            # SPGD-1035: in a shallow checkout the overwhelmingly likely cause
+            # is that <base> is simply not in the clone's history (git's own
+            # stderr says `fatal: bad object` / `unknown revision`), and the
+            # fix is a fetch — a cause the bare message never named, leaving
+            # "bad ref" and "shallow history" indistinguishable. Non-shallow
+            # failures keep the original message.
+            raise UsageError,
+                  "--changed could not diff against #{base.inspect}: this checkout is shallow and " \
+                  "#{base.inspect} is not in its history — fetch it (fetch-depth: 0, or " \
+                  "git fetch origin #{base}) or pass a base the checkout contains"
+          end
+          raise UsageError, "--changed could not diff against #{base.inspect}"
+        end
 
         out.split("\0").reject(&:empty?)
       end
@@ -241,17 +269,57 @@ module SpecGuard
       # `git diff HEAD`, i.e. the working-tree-vs-HEAD no-op this class exists
       # to avoid. Reporting the first when the second is true would be a
       # confidently wrong explanation.
-      def base_note(resolved, base_kind, root)
+      #
+      # SPGD-1035: a shallow (depth-limited) checkout reproduces both thin
+      # shapes with a third cause those two stories miss — the merge base with
+      # the default branch is not in the clone's history at all — so whenever
+      # the repo IS shallow the note tells that story and names the remedy
+      # (fetch the default branch, or pass a base the checkout contains),
+      # retiring the "default-branch build" guess for shallow repos in both
+      # shapes.
+      def base_note(resolved, base_kind, root, is_shallow)
+        shallow_remedy =
+          "fetch the default branch (fetch-depth: 0) or pass --changed=<base> naming a base this checkout contains"
         case base_kind
         when :head_fallback
+          if is_shallow.call
+            return "this checkout is a shallow (depth-limited) clone and no default-branch ref " \
+                   "(#{DEFAULT_BRANCH_REFS.join(', ')}) is in its history, so the diff base fell " \
+                   "back to HEAD; --changed can only select uncommitted changes here — #{shallow_remedy}"
+          end
+
           "no default-branch ref (#{DEFAULT_BRANCH_REFS.join(', ')}) could be found, so the diff base " \
             "fell back to HEAD; --changed can only select uncommitted changes here"
         when :merge_base
           head, ok = git(%w[rev-parse HEAD], root)
           return nil unless ok && head.strip == resolved
 
+          if is_shallow.call
+            return "this checkout is a shallow (depth-limited) clone, so the merge base with the " \
+                   "default branch is not in its history and the diff base is HEAD itself — only " \
+                   "uncommitted changes can be selected; #{shallow_remedy}"
+          end
+
           "the diff base is HEAD itself (this looks like a default-branch build), " \
             "so only uncommitted changes can be selected"
+        end
+      end
+
+      # Memoized per-run `git rev-parse --is-shallow-repository` probe.
+      # SPGD-1035: shallowness is consulted only in the branches where it
+      # changes the message (a derived base of HEAD, a failed diff), so the
+      # full-clone happy path makes zero new git invocations and the memo caps
+      # the probe at one per run. An unreadable answer (old git without the
+      # flag) reads as not shallow, keeping today's messages exactly.
+      # @return [Proc] zero-argument; true iff git reports a shallow repository
+      def shallow_probe(root)
+        cached = nil
+        lambda do
+          if cached.nil?
+            out, ok = git(%w[rev-parse --is-shallow-repository], root)
+            cached = ok && out.strip == "true"
+          end
+          cached
         end
       end
 
