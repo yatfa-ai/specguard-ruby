@@ -54,6 +54,22 @@ bundle exec specguard-lint --changed   # CI mode: only files in the current diff
 bundle exec specguard-lint             # one-off audit: every *_spec.rb
 ```
 
+`--changed` is the CI selection mode: it diffs against the **merge base with
+the default branch** (`origin/HEAD`, then `origin/main`/`origin/master`, then
+their local names) — never a bare working-tree-vs-index `git diff`, which is
+empty on a clean checkout. `--changed=<base>` overrides the base for pipelines
+that know better. In a **shallow** checkout — the default depth-1 `git clone`
+behind `actions/checkout@v4` — the merge base with the default branch is not
+in the clone's history, so the derived base is HEAD itself and the selection
+comes up empty: it still exits `0`, but its stderr note (and `--json`
+`selection.note`) names the checkout as **shallow** and the remedy — fetch the
+default branch (`fetch-depth: 0`) or pass `--changed=<base>` naming a base the
+checkout contains. An explicit `--changed=<base>` that is not in a shallow
+checkout's history is a usage error (exit `2`) naming that cause and the same
+remedy, not the bare "could not diff against" a full clone reports for a
+genuinely bad ref. A selection that comes up empty stays exit `0` and says WHY
+on stderr — the exit contract is unchanged; only the WHY is truthful now.
+
 Files are **positional** (`specguard-lint spec/order_spec.rb`); there is no `--source` flag —
 that belongs to `validate-intent`, not to this one.
 
