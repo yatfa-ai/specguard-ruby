@@ -58,7 +58,16 @@ bundle exec specguard-lint             # one-off audit: every *_spec.rb
 the default branch** (`origin/HEAD`, then `origin/main`/`origin/master`, then
 their local names) — never a bare working-tree-vs-index `git diff`, which is
 empty on a clean checkout. `--changed=<base>` overrides the base for pipelines
-that know better. In a **shallow** checkout — the default depth-1 `git clone`
+that know better. Selection also takes in **untracked** files: a brand-new
+spec that has not been `git add`ed is part of what the branch changed, whether
+or not the change is committed yet. One `git ls-files --others
+--exclude-standard` call per run is unioned with the diff — `.gitignore`d
+paths (scratch directories, vendored code, build output) never enter the
+selection — and untracked files obey the same scoping as diffed ones, so an
+untracked spec outside the current directory is counted as outside, not
+checked. When the untracked leg contributed, the `checked N spec files changed
+since <base>` line says `including M untracked`.
+In a **shallow** checkout — the default depth-1 `git clone`
 behind `actions/checkout@v4` — the merge base with the default branch is not
 in the clone's history, so the derived base is HEAD itself and the selection
 comes up empty: it still exits `0`, but its stderr note (and `--json`
