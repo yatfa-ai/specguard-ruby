@@ -407,6 +407,146 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
       end
     end
 
+    describe "untracked files" do
+      # THE defect SPGD-1119 exists for: `git diff` cannot see a never-added
+      # file, and in the mixed shape every real working tree has — a tracked
+      # edit somewhere plus the branch's newest spec still untracked — the
+      # selection was non-empty WITHOUT the new file, so the loud-empty
+      # machinery never fired and an annotation defect rode to CI behind a
+      # checked-count reporting success.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "an untracked new spec is selected alongside a tracked change in the same working tree", layer: "unit" }
+      it "selects an untracked new spec alongside a tracked change" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        File.write(File.join(root, "spec/base_spec.rb"), "# edited\n")
+        write(root, "spec/new_untracked_spec.rb")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/base_spec.rb", "spec/new_untracked_spec.rb"])
+      end
+
+      # The untracked-only shape: the branch's only spec change is a file git
+      # has never been told about. Before the untracked leg this selected
+      # nothing and the empty reason said "nothing changed against <base>" —
+      # a confidently wrong explanation, precisely the kind the class header
+      # forbids.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "an untracked-only working tree selects the new spec instead of reporting nothing changed", layer: "unit" }
+      it "selects the new spec in an untracked-only working tree" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "spec/brand_new_spec.rb")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/brand_new_spec.rb"])
+        expect(selection.stats.changed).to eq(1)
+        expect(selection.stats.untracked).to eq(1)
+      end
+
+      # `--exclude-standard` is the boundary: a gitignored path is untracked,
+      # but it is not the branch's work.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "a gitignored untracked spec is never selected", layer: "unit" }
+      it "never selects a gitignored untracked spec" do
+        init_repo(root)
+        write(root, ".gitignore", "scratch/\n")
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "scratch/ignored_spec.rb")
+        write(root, "spec/new_untracked_spec.rb")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/new_untracked_spec.rb"])
+      end
+
+      # `ls-files` reads the working tree and the index, not history: a
+      # depth-1 clone — where the diff base may barely exist — still selects
+      # a brand-new untracked spec.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "an untracked spec is selected even in a depth-1 clone where no history exists to diff", layer: "unit" }
+      it "selects untracked files in a shallow clone, where no history exists to diff" do
+        src = File.join(root, "source")
+        FileUtils.mkdir_p(src)
+        init_repo(src)
+        write(src, "spec/base_spec.rb")
+        commit(src, "base")
+        # Same as the shallow fixtures above: git writes the `.git/shallow`
+        # marker only when the clone actually truncates, so the source needs a
+        # second commit for the depth cut to happen.
+        write(src, "HISTORY.md", "# filler so a depth-1 clone truncates\n")
+        commit(src, "second commit — the depth cut")
+        dst = File.join(root, "shallow")
+        git("clone", "-q", "--depth", "1", "file://#{src}", dst, chdir: root)
+
+        write(dst, "spec/new_untracked_spec.rb")
+
+        # Precondition: the clone is what it claims.
+        shallow, = Open3.capture2("git", "rev-parse", "--is-shallow-repository", chdir: dst)
+        expect(shallow.strip).to eq("true")
+
+        selection = described_class.select(changed: true, root: dst)
+
+        expect(selection.files).to eq(["spec/new_untracked_spec.rb"])
+      end
+
+      # Same scoping as the diff leg: the untracked names are repo-root
+      # relative and run through the same prefix stripping, so an untracked
+      # spec outside `root` is counted, not selected — and it does not inflate
+      # `untracked`, which names files the run actually checked.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "an untracked spec outside the selection root is counted as outside rather than selected or counted untracked", layer: "unit" }
+      it "counts an untracked spec outside the root as outside, not selected" do
+        init_repo(root)
+        write(root, "README.md", "hello\n")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "sub/spec/inner_spec.rb")
+        write(root, "other/spec/outside_spec.rb")
+
+        selection = described_class.select(changed: true, root: File.join(root, "sub"))
+
+        expect(selection.files).to eq(["spec/inner_spec.rb"])
+        expect(selection.stats.outside_root).to eq(1)
+        expect(selection.stats.untracked).to eq(1)
+      end
+
+      # The SPGD-504 pattern: the new counter arrives defaulting to zero, and
+      # its arithmetic is pinned. A tree with an untracked non-spec file is
+      # neither selected by it nor counted in `untracked` — it fails the
+      # suffix filter like any other non-spec name — while the diffed file
+      # stays attributed to the diff leg.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "stats default untracked to zero and attribute each selected file to its leg", layer: "unit" }
+      it "defaults untracked to zero and attributes each selected file to its leg" do
+        expect(described_class::Stats.new.untracked).to eq(0)
+
+        init_repo(root)
+        write(root, ".gitignore", "scratch/\n")
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        File.write(File.join(root, "spec/base_spec.rb"), "# edited\n")
+        write(root, "spec/new_one_spec.rb")
+        write(root, "app/models/order.rb", "class Order; end\n")
+        write(root, "scratch/junk_spec.rb")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/base_spec.rb", "spec/new_one_spec.rb"])
+        # The union's candidate names: the diff's base_spec.rb plus the
+        # untracked new_one_spec.rb and order.rb (gitignored scratch never
+        # enters).
+        expect(selection.stats.changed).to eq(3)
+        expect(selection.stats.spec_matches).to eq(2)
+        expect(selection.stats.outside_root).to eq(0)
+        expect(selection.stats.unreadable).to eq(0)
+        expect(selection.stats.untracked).to eq(1)
+      end
+    end
+
     describe "explaining a thin selection" do
       # Both fallbacks leave the base at HEAD, and they are NOT the same thing:
       # one is a normal default-branch build, the other means --changed has

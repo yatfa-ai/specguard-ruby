@@ -77,6 +77,59 @@ RSpec.describe SpecGuard::RSpec::CLI do
       end
     end
 
+    def git!(*args, chdir:)
+      _out, e, status = Open3.capture3("git", *args, chdir: chdir)
+      raise "git #{args.join(' ')} failed: #{e}" unless status.success?
+    end
+
+    # SPGD-1119: files can reach the selection through the untracked leg, and
+    # "changed since <base>" alone over-claims provenance for a file the diff
+    # never saw. The count names how many came from that leg — exactly the
+    # files the run checked through it, nothing more.
+    # @intent: { entity: "CLI report", action: "state what was checked", behavior: "the changed-mode checked-count names how many selected files were untracked", layer: "unit" }
+    it "says how many selected files were untracked in the changed-mode count" do
+      Dir.mktmpdir do |dir|
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
+        FileUtils.mkdir_p(File.join(dir, "spec"))
+        File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
+        File.write(File.join(dir, "spec/base_spec.rb"), "# edited\n")
+        File.write(File.join(dir, "spec/new_untracked_spec.rb"), "# new\n")
+
+        Dir.chdir(dir) { cli.run(["--changed"]) }
+      end
+
+      expect(out).to match(/checked 2 spec files changed since \S+ including 1 untracked/)
+    end
+
+    # The reason ladder keeps its truth: "nothing changed against <base>" can
+    # now only fire when nothing tracked changed AND no untracked spec exists.
+    # A branch whose only spec is a brand-new untracked file gets checked, not
+    # explained away with a confidently wrong reason.
+    # @intent: { entity: "CLI", action: "explain an empty changed selection", behavior: "an untracked-only working tree is checked rather than reported as nothing having changed", layer: "unit" }
+    it "never says nothing changed when the branch's only spec is untracked" do
+      Dir.mktmpdir do |dir|
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
+        FileUtils.mkdir_p(File.join(dir, "spec"))
+        File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
+        File.write(File.join(dir, "spec/brand_new_spec.rb"), "# new\n")
+
+        Dir.chdir(dir) { cli.run(["--changed"]) }
+      end
+
+      expect(out).to include("checked 1 spec file changed since")
+      expect(err).not_to include("nothing changed against")
+    end
+
     # @intent: { entity: "CLI report", action: "warn on an empty selection", behavior: "an empty selection warns loudly on stderr instead of passing silently", layer: "unit" }
     it "warns loudly on stderr when the selection is empty" do
       Dir.mktmpdir do |dir|

@@ -87,10 +87,32 @@ module SpecGuard
     # quotes and all, which no longer names a file — an accented spec file would
     # be silently dropped and then misreported as "nothing changed".
     #
-    # Known limitation: `git diff` cannot see **untracked** files, so a brand
-    # new spec file that has not been `git add`ed is not selected. In CI (a
-    # clean checkout of a commit) that cannot arise; locally the loud empty
-    # selection is what surfaces it.
+    # == Untracked files are selected too
+    #
+    # `git diff` cannot see a file that has never been `git add`ed — but "what
+    # this branch changed, whether or not the change is committed yet" covers a
+    # never-added file, and a mode that silently skipped it would ride the
+    # branch's newest spec past the gate: in the mixed shape every real working
+    # tree has (a tracked edit somewhere, the new spec still untracked), the
+    # selection was non-empty without the new file, so the loud-empty machinery
+    # never fired and the defect shipped behind a checked-count reporting
+    # success.
+    #
+    # So the `--changed` name set is a union: the diff's paths plus ONE
+    # `git ls-files --others --exclude-standard -z` call per selection, run at
+    # the toplevel so its repo-root-relative output flows through the same
+    # scoping as the diff's (from a subdirectory `ls-files` emits
+    # cwd-relative paths, which would defeat it). `--exclude-standard` is the
+    # boundary: `.gitignore`d paths — scratch directories, vendored code, build
+    # output — never enter the selection. The two legs are disjoint by
+    # construction (an untracked path is never a diff path), so the union
+    # cannot double-count; {Stats.untracked} says how many of the selected
+    # files arrived via the untracked leg, and the empty-reason ladder's
+    # "nothing changed against <base>" can now only fire when the working tree
+    # is genuinely clean. That `ls-files` call is the untracked leg's entire
+    # added cost, and it is scoped to this mode — the "zero new git
+    # invocations on the full-clone happy path" property SPGD-1035 established
+    # belongs to the lazy shallow probe alone, not to `--changed` as a whole.
     module FileSelector
       # `test/**/*_test.rb` rather than `**/*_test.rb`: the `test/` directory
       # is where both Rails and Minitest itself put Minitest files, and
@@ -112,9 +134,13 @@ module SpecGuard
 
       # Why an empty `--changed` selection is empty. Every count is a filter
       # this class applied, in the order it applied them, so the CLI can name
-      # the real cause instead of guessing at the last one.
-      Stats = Data.define(:changed, :spec_matches, :outside_root, :unreadable) do
-        def initialize(changed: 0, spec_matches: 0, outside_root: 0, unreadable: 0)
+      # the real cause instead of guessing at the last one. The exception is
+      # `untracked`, which filters nothing: it counts the selected files that
+      # arrived via the untracked leg, so the report can say where a file the
+      # diff never saw came from (an untracked spec outside `root` is counted
+      # in `outside_root`, not here — this names files the run checked).
+      Stats = Data.define(:changed, :spec_matches, :outside_root, :unreadable, :untracked) do
+        def initialize(changed: 0, spec_matches: 0, outside_root: 0, unreadable: 0, untracked: 0)
           super
         end
       end
@@ -178,20 +204,31 @@ module SpecGuard
       end
 
       # Resolves git's repo-root-relative output into paths relative to `root`,
-      # dropping (and counting) everything the two scoping rules exclude.
+      # dropping (and counting) everything the two scoping rules exclude. The
+      # name set is the union of the diff leg and the untracked leg; each name
+      # is tagged with its leg so {Stats.untracked} can attribute the selected
+      # files the diff never saw. The legs are disjoint by construction (an
+      # untracked path is never a diff path), so the plain union cannot
+      # double-count and needs no dedup.
       # @return [[Array<String>, Stats]]
       def changed_files(base, root, is_shallow)
-        names = diff_names(base, root, is_shallow)
-        specs = names.select { |name| CHANGED_PATTERNS.any? { |pattern| File.fnmatch?(pattern, name) } }
+        names = diff_names(base, root, is_shallow).map { |name| [name, false] }
 
         top = toplevel(root)
+        names += untracked_names(top.empty? ? root : top).map { |name| [name, true] }
+
+        specs = names.select { |(name, _)|
+          CHANGED_PATTERNS.any? { |pattern| File.fnmatch?(pattern, name) }
+        }
+
         prefix = directory_prefix(top.empty? ? root : top)
         root_prefix = directory_prefix(real_path(root))
 
         files = []
         outside = 0
         unreadable = 0
-        specs.each do |name|
+        untracked = 0
+        specs.each do |(name, was_untracked)|
           absolute = prefix + name
           relative = strip_prefix(absolute, root_prefix)
           if relative.nil?
@@ -200,12 +237,13 @@ module SpecGuard
             unreadable += 1
           else
             files << relative
+            untracked += 1 if was_untracked
           end
         end
 
         [files.sort,
          Stats.new(changed: names.length, spec_matches: specs.length,
-                   outside_root: outside, unreadable: unreadable)]
+                   outside_root: outside, unreadable: unreadable, untracked: untracked)]
       end
 
       # `--diff-filter=d` drops deleted paths — `git diff --name-only` lists
@@ -231,6 +269,26 @@ module SpecGuard
         end
 
         out.split("\0").reject(&:empty?)
+      end
+
+      # The untracked leg of `--changed`: every file git does not track, minus
+      # what `--exclude-standard` excludes (`.gitignore`, `.git/info/exclude`,
+      # the global excludes file). Run at the toplevel, where `ls-files` emits
+      # repo-root-relative paths — from a subdirectory it emits cwd-relative
+      # ones, which would break the root-scoping the diff leg's output goes
+      # through. `-z` for the same reason as {diff_names}: NUL-separated and
+      # never `core.quotePath`-quoted. Without `--directory` git lists the
+      # files inside an untracked directory rather than the directory itself,
+      # which is what the suffix filter wants. `ls-files` reads the working
+      # tree and the index only — no history — so the leg works in a shallow
+      # clone where the diff base barely exists. A failure degrades to an
+      # empty leg rather than failing the run: the repository was already
+      # verified, the tracked diff above remains the primary evidence, and a
+      # half-readable working tree must not kill a gate that would otherwise
+      # check every tracked spec.
+      def untracked_names(chdir)
+        out, ok = git(%w[ls-files --others --exclude-standard -z], chdir)
+        ok ? out.split("\0").reject(&:empty?) : []
       end
 
       # The repository's top level — what `git diff`'s paths are relative to.
@@ -308,9 +366,12 @@ module SpecGuard
       # Memoized per-run `git rev-parse --is-shallow-repository` probe.
       # SPGD-1035: shallowness is consulted only in the branches where it
       # changes the message (a derived base of HEAD, a failed diff), so the
-      # full-clone happy path makes zero new git invocations and the memo caps
-      # the probe at one per run. An unreadable answer (old git without the
-      # flag) reads as not shallow, keeping today's messages exactly.
+      # probe makes zero new git invocations of its own on the full-clone
+      # happy path, and the memo caps it at one per run. (That zero is the
+      # probe's, not the mode's: the untracked leg adds its one `ls-files`
+      # call to every `--changed` selection, whatever the clone's depth.) An
+      # unreadable answer (old git without the flag) reads as not shallow,
+      # keeping today's messages exactly.
       # @return [Proc] zero-argument; true iff git reports a shallow repository
       def shallow_probe(root)
         cached = nil

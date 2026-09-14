@@ -228,14 +228,23 @@ module SpecGuard
       # `summary.files`. The warnings are diagnostics about the linter rather
       # than findings, so they stay on stderr exactly as they are — a run that
       # selected nothing is still loud, in both renderers.
+      #
+      # The `--changed` count names its provenance: files can reach the
+      # selection through the untracked leg (`file_selector.rb`), and "changed
+      # since <base>" alone over-claims for a file the diff never saw. When
+      # the untracked leg contributed, the line says how many — the same
+      # `stats.untracked` the selection carries, so the clause can only ever
+      # name files this run actually checked.
       def report_selection(selection, json:)
         if selection.empty?
           @stderr.puts "specguard-lint: warning: selected 0 spec files — #{empty_reason(selection)}"
           @stderr.puts "specguard-lint: warning: #{selection.note}" if selection.note
         elsif !json
+          untracked = selection.mode == :changed ? selection.stats&.untracked.to_i : 0
           @stdout.puts "specguard-lint: checked #{selection.count} spec file#{'s' unless selection.count == 1}" \
                        "#{" changed since #{selection.base}" if selection.mode == :changed}" \
-                       "#{" under #{Dir.pwd}" if selection.mode == :all}"
+                       "#{" under #{Dir.pwd}" if selection.mode == :all}" \
+                       "#{" including #{untracked} untracked" if untracked.positive?}"
         end
       end
 
