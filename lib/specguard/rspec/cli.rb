@@ -225,9 +225,18 @@ module SpecGuard
       #
       # Under `--json` the count is not dropped, it MOVES: stdout carries one
       # document and nothing else, and this line's number is that document's
-      # `summary.files`. The warnings are diagnostics about the linter rather
-      # than findings, so they stay on stderr exactly as they are — a run that
-      # selected nothing is still loud, in both renderers.
+      # `summary.files`. The sentence branches by STREAM, not by content: the
+      # human renderer reads it on stdout, the json renderer on stderr, where
+      # diagnostics about the linter already live — the empty-selection
+      # warning is the precedent, SPGD-247 the doctrine. (SPGD-1134: this was
+      # an `elsif !json` suppression, which left a json run's selection
+      # unverifiable — the machine channel named neither its resolved base nor
+      # its untracked leg, so the bridge, which passes `--json`
+      # unconditionally, could only verify the diff ∪ untracked union by
+      # arithmetic on `summary.files`.) The warnings below are diagnostics
+      # about the linter rather than findings, so they stay on stderr exactly
+      # as they are — a run that selected nothing is still loud, in both
+      # renderers.
       #
       # The `--changed` count names its provenance: files can reach the
       # selection through the untracked leg (`file_selector.rb`), and "changed
@@ -239,13 +248,22 @@ module SpecGuard
         if selection.empty?
           @stderr.puts "specguard-lint: warning: selected 0 spec files — #{empty_reason(selection)}"
           @stderr.puts "specguard-lint: warning: #{selection.note}" if selection.note
-        elsif !json
-          untracked = selection.mode == :changed ? selection.stats&.untracked.to_i : 0
-          @stdout.puts "specguard-lint: checked #{selection.count} spec file#{'s' unless selection.count == 1}" \
-                       "#{" changed since #{selection.base}" if selection.mode == :changed}" \
-                       "#{" under #{Dir.pwd}" if selection.mode == :all}" \
-                       "#{" including #{untracked} untracked" if untracked.positive?}"
+        else
+          json ? @stderr.puts(selection_line(selection)) : @stdout.puts(selection_line(selection))
         end
+      end
+
+      # The selection sentence, built at exactly one site and written by both
+      # renderers — only the stream differs. The human line is the contract
+      # of record; the json renderer printing the SAME bytes is what makes
+      # "the machine reads the provenance the human does" a property of the
+      # code rather than a promise two copies could drift apart on.
+      def selection_line(selection)
+        untracked = selection.mode == :changed ? selection.stats&.untracked.to_i : 0
+        "specguard-lint: checked #{selection.count} spec file#{'s' unless selection.count == 1}" \
+          "#{" changed since #{selection.base}" if selection.mode == :changed}" \
+          "#{" under #{Dir.pwd}" if selection.mode == :all}" \
+          "#{" including #{untracked} untracked" if untracked.positive?}"
       end
 
       # `:explicit` is absent by construction — an explicit Selection is only
