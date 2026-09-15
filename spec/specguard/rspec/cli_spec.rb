@@ -198,6 +198,112 @@ RSpec.describe SpecGuard::RSpec::CLI do
     # gem still owns — stays pinned in annotation_scanner_spec.rb.
   end
 
+  # The zero-annotation coverage note: `specguard-lint` already knows which of
+  # the files it checked carry no `@intent` annotations — zero findings is
+  # otherwise ambiguous between "every checked file annotated and valid" and
+  # "half the checked files carry nothing", and the bridge (which serves
+  # `--json` exclusively and forwards stderr verbatim) has no other view into
+  # the repository's spec files. The note is stderr prose exactly because a
+  # missing annotation is a coverage fact, not a lint failure (SPGD-12 §1):
+  # exit codes, stdout and the document stay byte-identical.
+  describe "the zero-annotation coverage note" do
+    def write_annotated(path)
+      File.write(path, <<~RUBY)
+        # @intent: { entity: "Order", action: "total", behavior: "sums line totals into the order total", layer: "unit" }
+        RSpec.describe(Order) { it('totals') { expect(1).to eq(1) } }
+      RUBY
+    end
+
+    def write_bare(path)
+      File.write(path, "RSpec.describe(Order) { it('works') { expect(1).to eq(1) } }\n")
+    end
+
+    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "a mixed selection names the bare files on stderr in human mode and none that is annotated", layer: "unit" }
+    it "names the read-but-unannotated files on stderr in human mode, and none that is annotated" do
+      Dir.mktmpdir do |dir|
+        annotated = File.join(dir, "annotated_spec.rb")
+        bare = File.join(dir, "bare_spec.rb")
+        write_annotated(annotated)
+        write_bare(bare)
+
+        code = cli.run([annotated, bare])
+
+        expect(code).to eq(described_class::EXIT_OK)
+        expect(err).to include(
+          "specguard-lint: note: 1 of 2 checked spec files carries no @intent annotations: #{bare}"
+        )
+        expect(err).not_to include(annotated)
+      end
+    end
+
+    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "the note reaches stderr in json mode too while the document's shape and counts stay untouched", layer: "unit" }
+    it "names them on stderr in json mode too, leaving the document untouched" do
+      Dir.mktmpdir do |dir|
+        annotated = File.join(dir, "annotated_spec.rb")
+        bare = File.join(dir, "bare_spec.rb")
+        write_annotated(annotated)
+        write_bare(bare)
+
+        code = cli.run(["--json", annotated, bare])
+
+        expect(code).to eq(described_class::EXIT_OK)
+        expect(err).to include(
+          "specguard-lint: note: 1 of 2 checked spec files carries no @intent annotations: #{bare}"
+        )
+        document = JSON.parse(out)
+        expect(document).to include(
+          "ok" => true,
+          "summary" => { "files" => 2, "annotations" => 1, "failed" => 0 }
+        )
+        expect(document["findings"].map { |f| f["file"] }).to eq([annotated])
+      end
+    end
+
+    # Byte-stability: a fully annotated run's stderr is exactly what it was —
+    # the provenance line alone. Any extra line there would leak into every
+    # byte-locked consumer (regression_targets_spec.rb, validator_backend
+    # parity).
+    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "a fully annotated selection emits no note, leaving stderr exactly the provenance line", layer: "unit" }
+    it "adds no note when every checked file carries an annotation" do
+      Dir.mktmpdir do |dir|
+        first = File.join(dir, "first_spec.rb")
+        second = File.join(dir, "second_spec.rb")
+        write_annotated(first)
+        write_annotated(second)
+
+        code = cli.run([first, second])
+
+        expect(code).to eq(described_class::EXIT_OK)
+        expect(err.lines.length).to eq(1)
+        expect(err.lines.first).to start_with("specguard-lint: validated by ")
+        expect(err).not_to include("note:")
+      end
+    end
+
+    # An unread file is not a zero-annotation file: the run could not look
+    # inside it, and the unread clause plus its line-less FAIL already report
+    # it. Naming it annotation-free would overstate exactly the way the
+    # summary count refuses to.
+    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "an unread file is never named by the note, which keeps naming the bare file it was checked alongside", layer: "unit" }
+    it "never names an unread file — the unread clause stays its only reporter" do
+      Dir.mktmpdir do |dir|
+        bare = File.join(dir, "bare_spec.rb")
+        gone = File.join(dir, "gone_spec.rb")
+        write_bare(bare)
+
+        code = cli.run([bare, gone])
+
+        expect(code).to eq(described_class::EXIT_MALFORMED)
+        expect(err).to include(
+          "specguard-lint: note: 1 of 2 checked spec files carries no @intent annotations: #{bare}"
+        )
+        expect(err).not_to include(gone)
+        expect(out).to include("FAIL  #{gone} — could not read file")
+        expect(out).to include("checked 0 @intent annotations, 0 malformed; 1 file could not be read")
+      end
+    end
+  end
+
   # SPGD-900: the stacked-annotation structural pass. Two consecutive
   # comment-form `@intent:` lines above one `it` leave the upper line
   # unreachable to the one-line lookback (SPGD-12 §2) — dead metadata the
@@ -612,6 +718,7 @@ RSpec.describe SpecGuard::RSpec::CLI do
       # one document and nothing else.
       # @intent: { entity: "CLI json renderer", action: "carry the selection provenance", behavior: "a json-mode changed run states the checked count, resolved base and untracked leg on stderr while stdout stays one clean document", layer: "unit" }
       it "carries the selection sentence, base and untracked count included, on stderr in json mode" do
+        bare_files = nil
         Dir.mktmpdir do |dir|
           git!("init", "-q", "--initial-branch=main", chdir: dir)
           git!("config", "user.email", "t@example.com", chdir: dir)
@@ -628,12 +735,24 @@ RSpec.describe SpecGuard::RSpec::CLI do
           Dir.chdir(dir) { code = cli.run(["--json", "--changed"]) }
 
           expect(code).to eq(described_class::EXIT_OK)
+          # Changed-mode selections name their files relative to the working
+          # directory, and the note echoes paths exactly as they were checked.
+          bare_files = ["spec/base_spec.rb", "spec/new_untracked_spec.rb"]
         end
 
         expect(err).to match(/checked 2 spec files changed since \S+ including 1 untracked/)
         # Exactly one checked-line reaches stderr — the selection sentence
         # itself; the provenance line names no count and no warning fires.
         expect(err.lines.grep(/specguard-lint: checked/).length).to eq(1)
+        # SPGD-1159: the selection's fixture files are both annotation-free,
+        # so the coverage note fires here too — naming both bare files and
+        # neither of anything else. The grep above cannot match it (the note's
+        # prefix is `specguard-lint: note:`), stdout stays one document, and
+        # this turns the interaction into coverage rather than collateral.
+        expect(err).to include(
+          "specguard-lint: note: 2 of 2 checked spec files carry no @intent annotations: " \
+          "#{bare_files.join(', ')}"
+        )
         expect(out).not_to include("checked")
         expect { JSON.parse(out) }.not_to raise_error
         expect(out.scan(/^\{$/).length).to eq(1)

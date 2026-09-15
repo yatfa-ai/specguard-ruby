@@ -156,7 +156,11 @@ module SpecGuard
         # `ok` is derived FROM it rather than recomputed from the findings, so
         # the two renderers cannot disagree about whether the run passed.
         code = results.any?(&:failed?) ? EXIT_MALFORMED : EXIT_OK
-        report_results(results, files: selection.count, json: options[:json], ok: code == EXIT_OK)
+        # The selection's file LIST rides along (the `files:` count stays what
+        # the document's summary consumes) because the coverage note is about
+        # which files were checked, not how many.
+        report_results(results, files: selection.count, selected_files: selection.files,
+                       json: options[:json], ok: code == EXIT_OK)
 
         code
       rescue UsageError, ValidatorError => e
@@ -355,8 +359,10 @@ module SpecGuard
       # statements about the same numbers, and a linter whose two renderers can
       # disagree about how much it checked is worse than one that only prints
       # prose: the disagreement is unfalsifiable from outside the process.
-      def report_results(results, files:, json:, ok:)
+      def report_results(results, files:, selected_files:, json:, ok:)
         annotations, unread = results.partition(&:line_scoped?)
+
+        report_zero_annotation_files(selected_files, annotations, unread)
 
         if json
           @stdout.puts JSONReporter.render(results, files: files, annotations: annotations.length, ok: ok)
@@ -366,6 +372,43 @@ module SpecGuard
         results.reject(&:ok?).each { |result| report_failure(result) }
 
         @stdout.puts summary_line(annotations, unread)
+      end
+
+      # The coverage note: which of the checked files were read and yielded no
+      # `@intent` annotation at all. Zero findings on stdout (or an empty
+      # `findings` list in the document) is otherwise ambiguous between
+      # "every checked file was annotated and valid" and "half the checked
+      # files carry nothing" — and the missing-annotation question is the most
+      # actionable one this tool touches, because the bridge agent reading
+      # `linter_stderr` has no other view into the repository's spec files.
+      #
+      # The boundary is the set-difference the partition above already
+      # supports: a file counts as covered when it yielded any line-scoped
+      # result (an annotation, valid or not — the SPGD-900 unreachable findings
+      # are line-scoped too and require an annotation to exist, so they cover
+      # their file) or when it could not be read at all (KIND_READ → `unread`).
+      # An unread file is NOT a zero-annotation file: it already gets its own
+      # summary clause and FAIL line, and calling it annotation-free would be
+      # the same overstatement `summary_line` refuses to make. Unreachable
+      # findings need a stacked annotation — impossible in a file with none —
+      # so `annotations ∪ unread` already covers every non-bare file and no
+      # third subtraction is needed.
+      #
+      # It is a NOTE on stderr, never a warning and never an exit code: "lint,
+      # don't require" (SPGD-12 §1) keeps a missing annotation a non-error.
+      # It is emitted before the json early-return so both renderers get it —
+      # stderr is renderer-indifferent (SPGD-247; the SPGD-1134 selection
+      # sentence is the landed precedent, and the bridge forwards stderr
+      # verbatim as `linter_stderr`). The prefix is deliberately not
+      # `specguard-lint: checked`, which the selection-sentence pin counts.
+      def report_zero_annotation_files(selected_files, annotations, unread)
+        bare = selected_files - annotations.map(&:file) - unread.map(&:file)
+        return if bare.empty?
+
+        verb = bare.length == 1 ? "carries" : "carry"
+        @stderr.puts "specguard-lint: note: #{bare.length} of #{selected_files.length} checked " \
+                     "spec file#{'s' unless selected_files.length == 1} #{verb} no @intent " \
+                     "annotations: #{bare.join(', ')}"
       end
 
       # The summary line exists for one reason — so "checked nothing" can never
