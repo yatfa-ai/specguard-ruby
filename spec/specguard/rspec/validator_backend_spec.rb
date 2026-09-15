@@ -1034,16 +1034,17 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # The one thing that must NOT match, for the reason it must not match in
       # the text report either: the provenance line is what tells the two runs
       # apart when nothing else about them does. It stays on stderr under
-      # `--json` — it is not folded into the document — so a consumer reading
-      # stdout gets one clean document and the answer to "which implementation"
-      # stays exactly one line, in exactly one place.
-      # @intent: { entity: "ValidatorBackend", action: "replay the recorded json corpus", behavior: "only the provenance line differs between the two backends, and it stays on stderr", layer: "integration" }
+      # `--json` — it is not folded into the document. SPGD-1134 joins it with
+      # the selection sentence: stderr beyond the provenance line is exactly
+      # that one line, byte-identical across the backends like the document
+      # itself, so "which implementation ran" remains the only difference.
+      # @intent: { entity: "ValidatorBackend", action: "replay the recorded json corpus", behavior: "only the provenance line differs between the two backends, and stderr beyond it carries the same selection sentence on both", layer: "integration" }
       it "leaves the provenance line on stderr, as the only thing that differs" do
         _, ruby_stderr, = run_json_cli({})
         _, go_stderr, = run_json_cli(go_env)
 
-        expect(stderr_beyond_provenance(go_stderr)).to be_empty
-        expect(stderr_beyond_provenance(ruby_stderr)).to be_empty
+        expect(stderr_beyond_provenance(go_stderr)).to eq("specguard-lint: checked 2 spec files\n")
+        expect(stderr_beyond_provenance(ruby_stderr)).to eq(stderr_beyond_provenance(go_stderr))
         expect(go_stderr).not_to eq(ruby_stderr)
       end
     end

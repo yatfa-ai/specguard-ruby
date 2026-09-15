@@ -582,16 +582,61 @@ RSpec.describe SpecGuard::RSpec::CLI do
     end
 
     # Diagnostics about the linter itself do not move: the SPGD-247 provenance
-    # line and every warning stay on stderr, byte for byte. A document on stdout
-    # is a report about the CODE, not a reason to relocate the commentary.
+    # line and every warning stay on stderr, byte for byte. SPGD-1134 joins
+    # them on the same terms — the selection provenance sentence, which the
+    # human report reads on stdout, rides stderr under `--json` too. `--json`
+    # changes the STREAM of that line, never its content: a document on stdout
+    # is a report about the CODE, not a reason to drop the one sentence that
+    # says what was selected.
     describe "stderr is untouched" do
-      # @intent: { entity: "CLI json renderer", action: "leave stderr intact", behavior: "json mode still writes exactly one provenance line naming the validator implementation", layer: "unit" }
+      def git!(*args, chdir:)
+        _out, e, status = Open3.capture3("git", *args, chdir: chdir)
+        raise "git #{args.join(' ')} failed: #{e}" unless status.success?
+      end
+
+      # @intent: { entity: "CLI json renderer", action: "leave stderr intact", behavior: "json mode writes exactly one provenance line naming the implementation plus the selection line naming what was checked", layer: "unit" }
       it "still writes exactly one provenance line naming the implementation" do
         described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--json", fixture_path("order_spec.rb")])
 
-        expect(err.lines.length).to eq(1)
-        expect(err).to start_with("specguard-lint: validated by validate-intent 0.1.4")
+        expect(err.lines.length).to eq(2)
+        expect(err.lines.first).to start_with("specguard-lint: validated by validate-intent 0.1.4")
         expect(err).to include("(SPECGUARD_VALIDATE_INTENT)")
+        expect(err.lines.last).to eq("specguard-lint: checked 1 spec file\n")
+      end
+
+      # SPGD-1134: a json-mode changed run must name its provenance — the base
+      # actually diffed against and how many selected files arrived untracked —
+      # or the machine channel cannot verify the diff ∪ untracked union at
+      # all. The bridge forwards stderr verbatim, so its agent reads this
+      # sentence instead of doing arithmetic on `summary.files`; stdout stays
+      # one document and nothing else.
+      # @intent: { entity: "CLI json renderer", action: "carry the selection provenance", behavior: "a json-mode changed run states the checked count, resolved base and untracked leg on stderr while stdout stays one clean document", layer: "unit" }
+      it "carries the selection sentence, base and untracked count included, on stderr in json mode" do
+        Dir.mktmpdir do |dir|
+          git!("init", "-q", "--initial-branch=main", chdir: dir)
+          git!("config", "user.email", "t@example.com", chdir: dir)
+          git!("config", "user.name", "T", chdir: dir)
+          FileUtils.mkdir_p(File.join(dir, "spec"))
+          File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+          git!("add", "-A", chdir: dir)
+          git!("commit", "-q", "-m", "base", chdir: dir)
+          git!("checkout", "-q", "-b", "feature", chdir: dir)
+          File.write(File.join(dir, "spec/base_spec.rb"), "# edited\n")
+          File.write(File.join(dir, "spec/new_untracked_spec.rb"), "# new\n")
+
+          code = 0
+          Dir.chdir(dir) { code = cli.run(["--json", "--changed"]) }
+
+          expect(code).to eq(described_class::EXIT_OK)
+        end
+
+        expect(err).to match(/checked 2 spec files changed since \S+ including 1 untracked/)
+        # Exactly one checked-line reaches stderr — the selection sentence
+        # itself; the provenance line names no count and no warning fires.
+        expect(err.lines.grep(/specguard-lint: checked/).length).to eq(1)
+        expect(out).not_to include("checked")
+        expect { JSON.parse(out) }.not_to raise_error
+        expect(out.scan(/^\{$/).length).to eq(1)
       end
 
       # @intent: { entity: "CLI json renderer", action: "leave stderr intact", behavior: "the loud empty-selection warning still reaches stderr in json mode", layer: "unit" }
