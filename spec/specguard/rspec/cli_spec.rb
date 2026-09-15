@@ -259,6 +259,52 @@ RSpec.describe SpecGuard::RSpec::CLI do
       end
     end
 
+    # SPGD-1163: the singular arm of the note is the one the landed pins never
+    # reach — every assertion above selects two files, so the noun ternary's
+    # `file#{'s' unless selected_files.length == 1}` singular form
+    # ("1 of 1 checked spec file carries") had no assertion. The pre-SPGD-1159
+    # "states the zero" example drives exactly this invocation (one bare file
+    # through `cli.run([path])`) and asserts stdout only, so the singular
+    # bytes were machine-observable contract — the specguard-mcp bridge
+    # forwards stderr verbatim as `linter_stderr` — pinned nowhere. These two
+    # examples pin the form byte-exactly, line end included, in both
+    # renderers.
+    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "a single bare file renders the note singular — 1 of 1 checked spec file carries — byte-exactly in human mode", layer: "unit" }
+    it "renders the note singular for a one-file selection in human mode" do
+      Dir.mktmpdir do |dir|
+        bare = File.join(dir, "bare_spec.rb")
+        write_bare(bare)
+
+        code = cli.run([bare])
+
+        expect(code).to eq(described_class::EXIT_OK)
+        expect(err).to include(
+          "specguard-lint: note: 1 of 1 checked spec file carries no @intent annotations: #{bare}\n"
+        )
+      end
+    end
+
+    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "the singular note reaches stderr in json mode too while the document keeps its one-file zero-annotation shape", layer: "unit" }
+    it "renders the note singular in json mode too, leaving the document untouched" do
+      Dir.mktmpdir do |dir|
+        bare = File.join(dir, "bare_spec.rb")
+        write_bare(bare)
+
+        code = cli.run(["--json", bare])
+
+        expect(code).to eq(described_class::EXIT_OK)
+        expect(err).to include(
+          "specguard-lint: note: 1 of 1 checked spec file carries no @intent annotations: #{bare}\n"
+        )
+        document = JSON.parse(out)
+        expect(document).to include(
+          "ok" => true,
+          "summary" => { "files" => 1, "annotations" => 0, "failed" => 0 }
+        )
+        expect(document["findings"]).to eq([])
+      end
+    end
+
     # Byte-stability: a fully annotated run's stderr is exactly what it was —
     # the provenance line alone. Any extra line there would leak into every
     # byte-locked consumer (regression_targets_spec.rb, validator_backend
