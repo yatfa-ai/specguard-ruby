@@ -106,6 +106,40 @@ RSpec.describe SpecGuard::RSpec::CLI do
       expect(out).to match(/checked 2 spec files changed since \S+ including 1 untracked/)
     end
 
+    # SPGD-1171: the `including N untracked` clause is count-gated
+    # (`if untracked.positive?`), so its zero arm — a fully-tracked changed
+    # selection, the common CI shape where the diff is entirely committed —
+    # must render the clause-free sentence. Every landed changed-mode driver
+    # selects exactly one untracked file, so the zero arm shipped undriven and
+    # unasserted while the specguard-ts twin pins the same property explicitly
+    # ("no clause at all — the line cannot over-claim"). The clause's presence
+    # condition is machine-consumed: the bridge forwards this line verbatim as
+    # linter_stderr.
+    # @intent: { entity: "CLI report", action: "state what was checked", behavior: "a fully-tracked changed selection renders the sentence with no untracked clause at all", layer: "unit" }
+    it "renders no untracked clause for a fully-tracked changed selection" do
+      base = nil
+      Dir.mktmpdir do |dir|
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
+        FileUtils.mkdir_p(File.join(dir, "spec"))
+        File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
+        File.write(File.join(dir, "spec/base_spec.rb"), "# edited\n")
+
+        base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
+        Dir.chdir(dir) { cli.run(["--changed"]) }
+      end
+
+      # Byte-exact for the whole sentence: the clause is not merely wrong-but-
+      # present, there is no clause at all — the line cannot over-claim.
+      line = out.lines.grep(/\Aspecguard-lint: checked .* changed since/).first
+      expect(line).to eq("specguard-lint: checked 1 spec file changed since #{base}\n")
+      expect(line).not_to include("untracked")
+    end
+
     # The reason ladder keeps its truth: "nothing changed against <base>" can
     # now only fire when nothing tracked changed AND no untracked spec exists.
     # A branch whose only spec is a brand-new untracked file gets checked, not
@@ -802,6 +836,38 @@ RSpec.describe SpecGuard::RSpec::CLI do
         expect(out).not_to include("checked")
         expect { JSON.parse(out) }.not_to raise_error
         expect(out.scan(/^\{$/).length).to eq(1)
+      end
+
+      # SPGD-1171: the zero arm of the same clause, on the machine channel.
+      # The bridge forwards stderr verbatim as linter_stderr, so a tracked-only
+      # changed run — every selected file from the diff, none untracked — must
+      # reach its agent as the clause-free sentence; a leaked clause would
+      # have the machine reading an untracked leg that never fired. Byte-exact
+      # against the resolved merge base, mirroring the twin's explicit absence
+      # pin ("no clause at all — the line cannot over-claim").
+      # @intent: { entity: "CLI json renderer", action: "carry the selection provenance", behavior: "a json-mode fully-tracked changed run states the sentence on stderr with no untracked clause", layer: "unit" }
+      it "carries the tracked-only changed sentence clause-free on stderr in json mode" do
+        base = nil
+        Dir.mktmpdir do |dir|
+          git!("init", "-q", "--initial-branch=main", chdir: dir)
+          git!("config", "user.email", "t@example.com", chdir: dir)
+          git!("config", "user.name", "T", chdir: dir)
+          FileUtils.mkdir_p(File.join(dir, "spec"))
+          File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+          git!("add", "-A", chdir: dir)
+          git!("commit", "-q", "-m", "base", chdir: dir)
+          git!("checkout", "-q", "-b", "feature", chdir: dir)
+          File.write(File.join(dir, "spec/base_spec.rb"), "# edited\n")
+
+          base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
+          Dir.chdir(dir) { cli.run(["--json", "--changed"]) }
+        end
+
+        line = err.lines.grep(/\Aspecguard-lint: checked .* changed since/).first
+        expect(line).to eq("specguard-lint: checked 1 spec file changed since #{base}\n")
+        expect(line).not_to include("untracked")
+        expect(out).not_to include("checked")
+        expect { JSON.parse(out) }.not_to raise_error
       end
 
       # @intent: { entity: "CLI json renderer", action: "leave stderr intact", behavior: "the loud empty-selection warning still reaches stderr in json mode", layer: "unit" }
