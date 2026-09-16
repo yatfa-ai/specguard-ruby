@@ -197,13 +197,25 @@ RSpec.describe "the specguard-lint exit contract" do
         expect(cli.run([fixture_path("order_spec.rb")])).to eq(2)
       end
 
-      # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "an internal exception is labelled an internal error on stderr and never printed as a FAIL block", layer: "unit" }
-      it "reports it as an internal error, not as a malformed annotation" do
+      # SPGD-1183: the no-document decision is most load-bearing on THIS arm.
+      # The misuse and validator arms crash at enumerated sites; the backstop's
+      # crash sites are by definition unenumerated, so nothing structural keeps
+      # stdout empty here except the decision itself. It is therefore pinned as
+      # a true absence, not as a vocabulary grep: a hazard document such as
+      # `{"ok": false, "findings": []}` printed from this rescue contains no
+      # "FAIL" and passes `not_to include("FAIL")` while handing a
+      # stdout-reading consumer a clean-looking report for a run that checked
+      # nothing. The SPGD-305 block (cli_spec.rb) pins the same absence on the
+      # misuse and validator arms, the sibling ingest CLI pins it on its own
+      # backstop, and the specguard-ts twin on its boundary catch ("a crashed
+      # run emits no document").
+      # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "an internal exception is labelled an internal error on stderr and stdout stays completely empty", layer: "unit" }
+      it "reports it as an internal error, printing no document" do
         allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_raise("boom")
         cli.run([fixture_path("order_spec.rb")])
 
         expect(err).to include("specguard-lint: internal error: RuntimeError: boom")
-        expect(out).not_to include("FAIL")
+        expect(out).to be_empty
       end
 
       # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "a NoMethodError raised from deep inside the pipeline is caught and mapped to two", layer: "unit" }
