@@ -250,7 +250,8 @@ module SpecGuard
       # ALWAYS a list of strings — `[]` where the line landed and where a
       # refusal's body said nothing this gem could read, never `null` and never
       # a bare string. {JSONReporter}'s `errors` makes the identical guarantee
-      # for the identical reason: `report.go:23-26` is explicit that a consumer
+      # for the identical reason: `JSONFinding` (open-test-intent,
+      # `cmd/validate-intent/report.go`) is explicit that a consumer
       # must never have to branch on the type of the field that says why
       # something failed, and one list is what lets a refusal's per-spec errors,
       # a socket error and "this line is not a run" be read by one code path.

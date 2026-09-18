@@ -645,10 +645,11 @@ RSpec.describe SpecGuard::RSpec::CLI do
       end
     end
 
-    # report.go:23-26 is explicit that a consumer must never have to branch on
-    # the type of `errors`. The gem's Result keeps `problem` (one sentence) and
-    # `reasons` (a list) mutually exclusive, so this is the one place the two
-    # collapse — and the collapse must not leak either shape.
+    # `JSONFinding` (open-test-intent, `cmd/validate-intent/report.go`) is
+    # explicit that a consumer must never have to branch on the type of
+    # `errors`. The gem's Result keeps `problem` (one sentence) and `reasons`
+    # (a list) mutually exclusive, so this is the one place the two collapse —
+    # and the collapse must not leak either shape.
     describe "`errors` is always a list of strings" do
       # @intent: { entity: "CLI json renderer", action: "shape the errors list", behavior: "every schema reason for a finding is carried, not only the first", layer: "unit" }
       it "carries every schema reason, not the first" do
@@ -724,8 +725,9 @@ RSpec.describe SpecGuard::RSpec::CLI do
 
     describe "the document's own consistency" do
       # `ok` is derived from the exit code the text path would also have
-      # produced rather than recomputed from the findings, following
-      # report.go:84-89, so the two renderers cannot disagree about the verdict.
+      # produced rather than recomputed from the findings, following `Emit`
+      # (open-test-intent, `cmd/validate-intent/report.go`), so the two
+      # renderers cannot disagree about the verdict.
       # @intent: { entity: "CLI json renderer", action: "stay self-consistent", behavior: "the document ok flag mirrors the exit code the same run returns", layer: "unit" }
       it "mirrors the exit code in `ok`" do
         expect(cli.run(["--json", fixture_path("order_spec.rb")])).to eq(0)

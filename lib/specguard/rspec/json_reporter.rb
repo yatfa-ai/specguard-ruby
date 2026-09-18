@@ -46,9 +46,10 @@ module SpecGuard
     #   * `errors` is ALWAYS a list of strings — `reasons` when the schema
     #     rejected the annotation, `[problem]` when discovery could not produce
     #     one at all, `[]` when it passed. Never null, never a bare string:
-    #     `report.go:23-26` is explicit that a consumer must never branch on its
-    #     type, and this is the one place the gem's mutually-exclusive
-    #     `problem`/`reasons` pair is normalised into the port's single list.
+    #     `JSONFinding` (open-test-intent, `cmd/validate-intent/report.go`) is
+    #     explicit that a consumer must never branch on its type, and this is
+    #     the one place the gem's mutually-exclusive `problem`/`reasons` pair
+    #     is normalised into the port's single list.
     #   * `line` is null exactly where the finding is not line-scoped, which is
     #     {Linter::Result#line_scoped?} — the same rule `#location` uses to
     #     print `file` rather than `file:0`. `:0` is not somewhere a reader can
@@ -71,7 +72,8 @@ module SpecGuard
     #
     # `ok` is likewise handed in, derived from the exit code the text path would
     # also have produced rather than recomputed from the findings, following
-    # `report.go:84-89` for the same reason.
+    # `Emit` (open-test-intent, `cmd/validate-intent/report.go`) for the same
+    # reason.
     #
     # `summary.failed`, by contrast, is counted here — from the findings this
     # document actually emitted, so `failed` always equals the number of entries
@@ -93,7 +95,8 @@ module SpecGuard
     # and read the line; it is still exactly one line, on every run, on both
     # arms.
     module JSONReporter
-      # The port's `jsonSchemaID` (`report.go:19`), and the basename of the
+      # The port's `jsonSchemaID` (open-test-intent,
+      # `cmd/validate-intent/report.go`), and the basename of the
       # gem's own vendored schema. Pinned to each other by a spec: the document
       # names the protocol it validated against, so it must not be able to name
       # one the gem does not carry.
