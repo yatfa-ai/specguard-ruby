@@ -6,10 +6,10 @@ require "json"
 require "digest"
 require "open3"
 
-# The opt-in Go validator backend.
+# The Go validator backend — since SPGD-867 the only validator
+# `specguard-lint` has.
 #
-# WHAT THIS FILE IS NOT — the same disclaimer message_parity_spec.rb carries,
-# for the same reason. Nothing here runs `validate-intent`. Every document
+# WHAT THIS FILE IS NOT — nothing here runs `validate-intent`. Every document
 # below is either RECORDED from the real binary (spec/fixtures/validator/) or
 # hand-built to be a shape the real binary must never emit, and the "binary" is
 # a four-line shell stub this file writes into a tmpdir.
@@ -17,10 +17,10 @@ require "open3"
 # That is deliberate, not a shortcut. `lib/specguard/rspec.rb`'s SCHEMA_PATH
 # forbids this gem a cross-repo runtime dependency, and a spec that shelled out
 # to a Go binary would pass on one container and be unrunnable on every other.
-# The live cross-repo comparison — gem-with-Go-backend vs gem-with-Ruby-backend
-# over a shared corpus — belongs in open-test-intent's own suite, where a Go
-# toolchain can be assumed. What belongs HERE is the recorded-report
-# comparisons below, and they are here.
+# There is no Ruby backend to run the other side of any such comparison —
+# since SPGD-867 this gem validates through the binary and only the binary, so
+# a live cross-repo Ruby-vs-Go comparison cannot exist anywhere. What belongs
+# HERE is the recorded-report comparisons below, and they are here.
 #
 # What IS proven here, without leaving the gem:
 #
