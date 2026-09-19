@@ -77,6 +77,57 @@ RSpec.describe SpecGuard::RSpec::CLI do
       end
     end
 
+    # SPGD-1255: the default walk is fenced out of dependency/build directories
+    # (`FileSelector::SKIPPED_DIRECTORIES`), and a fence that actually removed
+    # files must say so on the checked-count line — never a silent narrowing.
+    # @intent: { entity: "CLI report", action: "state what was checked", behavior: "the all-files checked-count names how many files the directory fence removed", layer: "unit" }
+    it "says how many files the default walk fenced out of dependency or build directories" do
+      Dir.mktmpdir do |dir|
+        FileUtils.cp(fixture_path("order_spec.rb"), dir)
+        vendored = File.join(dir, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec")
+        FileUtils.mkdir_p(vendored)
+        File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
+
+        Dir.chdir(dir) { cli.run([]) }
+
+        expect(out).to include(
+          "checked 1 spec file under #{dir} skipping 1 in dependency or build directories"
+        )
+      end
+    end
+
+    # The clause is count-gated exactly like `including N untracked`: a fence
+    # that removed nothing must leave the line byte-identical to an unfenced
+    # walk's, so the disclosure can never be read as an unconditional widening.
+    # @intent: { entity: "CLI report", action: "state what was checked", behavior: "an all-files run whose directory fence removed nothing keeps the checked-count byte-identical", layer: "unit" }
+    it "does not name the directory fence when it removed nothing" do
+      Dir.mktmpdir do |dir|
+        FileUtils.cp(fixture_path("order_spec.rb"), dir)
+        Dir.chdir(dir) { cli.run([]) }
+
+        expect(out).to include("checked 1 spec file under #{dir}")
+        expect(out).not_to include("skipping")
+      end
+    end
+
+    # An `:all` selection the fence EMPTIED must not blame the tree for
+    # holding no spec files: the files existed and the fence removed them.
+    # @intent: { entity: "CLI report", action: "warn on an empty selection", behavior: "an empty selection whose files were all fenced names the fence rather than claiming the tree held no specs", layer: "unit" }
+    it "names the directory fence when it emptied an otherwise populated tree" do
+      Dir.mktmpdir do |dir|
+        vendored = File.join(dir, "vendor/bundle/spec")
+        FileUtils.mkdir_p(vendored)
+        File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
+
+        Dir.chdir(dir) { cli.run([]) }
+
+        expect(err).to include(
+          "selected 0 spec files — 1 *_spec.rb or *_test.rb file found, " \
+          "all in dependency or build directories"
+        )
+      end
+    end
+
     def git!(*args, chdir:)
       _out, e, status = Open3.capture3("git", *args, chdir: chdir)
       raise "git #{args.join(' ')} failed: #{e}" unless status.success?

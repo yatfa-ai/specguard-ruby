@@ -16,6 +16,14 @@ module SpecGuard
     # diff names paths, not directories, and a changed test file is a test
     # file wherever the author put it.
     #
+    # The default walk also carries a fixed directory fence
+    # ({SKIPPED_DIRECTORIES}): dependency, build-output, scratch and VCS
+    # directories are never selected, so a bundled tree's `vendor/bundle/`
+    # gem specs are neither reported on nor failed over — third-party code
+    # the user did not write. `--changed` draws the same boundary from
+    # `.gitignore` (`--exclude-standard`) for free; the walk, which must keep
+    # working outside a repository, carries it as a name list instead.
+    #
     # == Why `--changed` is not `git diff --name-only`
     #
     # The Client Gem spec words `--changed` as "files in the current diff (via
@@ -122,6 +130,44 @@ module SpecGuard
       # no competitor convention to fence against.
       DEFAULT_GLOB = ["**/*_spec.rb", "test/**/*_test.rb"].freeze
 
+      # A named-file default-walk fence, ported from this product's own
+      # TypeScript answer (`specguard-ts` `src/lint/discover.ts`
+      # `SKIPPED_DIRECTORIES`, widened by the Ruby ecosystem's members). Every
+      # member is dependency, build-output, scratch or VCS material — code the
+      # user did not write and cannot edit, whose specs must never be selected:
+      #
+      #   * `node_modules` — npm dependencies (the port's founding member).
+      #   * `.git` — VCS internals; `Dir.glob` already skips hidden
+      #     directories, so this is belt-and-braces, named so the fence reads
+      #     complete beside its TypeScript twin.
+      #   * `dist` — build output.
+      #   * `.test-build` — this project family's own build/test scratch.
+      #   * `coverage` — SimpleCov's default report directory.
+      #   * `vendor` — a bundled Rails tree (`bundle install --deployment`)
+      #     puts every gem under `vendor/bundle/`, each shipping its own
+      #     specs; the measured failure this fence exists for.
+      #   * `tmp` — Rails' scratch directory (caches, pids, sockets).
+      #   * `log` — Rails' log directory.
+      #
+      # `--changed` gets this boundary for free — `--exclude-standard` keeps
+      # `.gitignore`d paths (scratch directories, vendored code, build output)
+      # out of its untracked leg. The walk has no git to ask, because it must
+      # keep working outside a repository exactly where `--changed` correctly
+      # refuses, so it carries the boundary as a name list instead. The list
+      # is matched against whole directory SEGMENTS of the root-relative path
+      # (see {skipped_directory?}), never as a substring — `spec/vendor_helpers/`
+      # is project code — and never against the absolute path.
+      SKIPPED_DIRECTORIES = %w[
+        node_modules
+        .git
+        dist
+        .test-build
+        coverage
+        vendor
+        tmp
+        log
+      ].freeze
+
       # The `--changed` counterparts of {DEFAULT_GLOB}: git hands back paths,
       # so the filter is a match over the whole path rather than a glob walk,
       # and the suffix alone decides. Deliberately not directory-scoped — a
@@ -146,8 +192,19 @@ module SpecGuard
       end
 
       # What a selection produced, plus enough context to report it honestly.
-      Selection = Data.define(:files, :mode, :base, :note, :stats) do
-        def initialize(files:, mode:, base: nil, note: nil, stats: nil)
+      #
+      # `skipped` is the fence count for the `:all` mode ({SKIPPED_DIRECTORIES}),
+      # defaulted to 0 so every other construction site is untouched. It
+      # deliberately rides `Selection` rather than a new `Stats` member:
+      # `Stats` is documented as the `--changed` empty-reason ladder ("why an
+      # empty `--changed` selection is empty") and the fence is neither
+      # `--changed`-bound nor an emptiness explanation — it is report context
+      # for a selection that may be perfectly full. `Selection` is what this
+      # file already uses to carry per-mode context (`base`, `note`, `stats`
+      # are all `--changed`-only and defaulted the same way), so the count
+      # follows that precedent instead of widening `Stats`'s contract.
+      Selection = Data.define(:files, :mode, :base, :note, :stats, :skipped) do
+        def initialize(files:, mode:, base: nil, note: nil, stats: nil, skipped: 0)
           super
         end
 
@@ -174,11 +231,33 @@ module SpecGuard
       end
 
       # Every test file under `root`, recursively, in either naming
-      # convention. Hidden directories are not traversed (no
-      # `File::FNM_DOTMATCH`), so `.git` and friends are skipped.
+      # convention, minus anything whose path runs through a
+      # {SKIPPED_DIRECTORIES} directory. Hidden directories are not traversed
+      # (no `File::FNM_DOTMATCH`), so `.git` and friends are skipped.
+      #
+      # The fence is decided on the path `Dir.glob(base: root)` yields —
+      # already relative to `root` — never on an absolute path: fixture roots
+      # (and the whole spec suite's) live under `Dir.mktmpdir`, i.e. inside a
+      # directory *named* `tmp`, and a fence reading absolute paths would
+      # drop every file in the tree. How many files the fence removed is
+      # carried on the `Selection` (`skipped`) so the CLI can disclose the
+      # narrowing instead of doing it silently.
       def select_all(root: Dir.pwd)
-        files = Dir.glob(DEFAULT_GLOB, base: root).select { |f| File.file?(File.join(root, f)) }.sort
-        Selection.new(files: files, mode: :all)
+        candidates = Dir.glob(DEFAULT_GLOB, base: root).select { |f| File.file?(File.join(root, f)) }.sort
+        kept, fenced = candidates.partition { |f| !skipped_directory?(f) }
+        Selection.new(files: kept, mode: :all, skipped: fenced.length)
+      end
+
+      # Whether a root-relative path runs through a {SKIPPED_DIRECTORIES}
+      # directory. Whole segments only — `File::SEPARATOR`-delimited — so a
+      # directory merely *named after* a fenced word (`spec/vendor_helpers/`)
+      # is not fenced, and the basename is excluded from the segment set: a
+      # path's last component is the file itself, so `spec/tmpfile_spec.rb`
+      # is selected whatever its name contains.
+      def skipped_directory?(path)
+        segments = path.split(File::SEPARATOR)
+        segments.pop
+        segments.any? { |segment| SKIPPED_DIRECTORIES.include?(segment) }
       end
 
       def select_changed(base: nil, root: Dir.pwd)

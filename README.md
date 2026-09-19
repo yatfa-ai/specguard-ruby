@@ -51,8 +51,18 @@ above another comment-form `@intent:` line, so the one-line lookback never claim
 
 ```bash
 bundle exec specguard-lint --changed   # CI mode: only files in the current diff
-bundle exec specguard-lint             # one-off audit: every *_spec.rb
+bundle exec specguard-lint             # one-off audit: every *_spec.rb outside dependency/build directories
 ```
+
+The default walk is fenced out of dependency and build directories — `node_modules`,
+`vendor`, `tmp`, `log`, `dist`, `.test-build`, `coverage`, `.git`, matched as whole
+directory names, so `spec/vendor_helpers/` is still yours. A bundled Rails tree
+(`bundle install --deployment` → `vendor/bundle/`) ships thousands of third-party gem
+specs; the walk neither reports on them nor fails over their annotations, and the
+zero-annotation coverage note counts only files you wrote — the same material
+`--changed` keeps out via `.gitignore`. When the fence removed files, the
+`checked N spec files` line says how many (`skipping M in dependency or build
+directories`); a file named explicitly on the command line is always checked.
 
 `--changed` is the CI selection mode: it diffs against the **merge base with
 the default branch** (`origin/HEAD`, then `origin/main`/`origin/master`, then
