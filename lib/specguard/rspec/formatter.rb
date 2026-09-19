@@ -7,7 +7,7 @@
 # == Why this file is not on `require "specguard/rspec"`'s chain
 #
 # `rspec` is a **development** dependency of this gem, not a runtime one
-# (specguard-rspec.gemspec declares exactly one runtime dependency: `json`,
+# (specguard-ruby.gemspec declares exactly one runtime dependency: `json`,
 # pinned; since SPGD-867 the validator arrives as a resolved binary rather
 # than as a gem). `bin/specguard-lint` loads `specguard/rspec`, and it has to
 # keep working for someone who installed the gem to lint annotations on a

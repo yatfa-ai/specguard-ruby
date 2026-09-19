@@ -2,8 +2,8 @@
 
 source "https://rubygems.org"
 
-# The client gem itself. The specguard-rspec meta-gemspec in this tree builds a
-# DIFFERENT gem and is deliberately not what this project develops against.
+# The client gem itself. This tree holds exactly one gemspec —
+# specguard-ruby.gemspec — and the name: argument below names it explicitly.
 gemspec name: "specguard-ruby"
 
 # Development-only: spec/support/validator_stub.rb uses json_schemer to give
