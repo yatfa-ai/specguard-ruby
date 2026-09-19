@@ -40,6 +40,29 @@ module SpecGuard
     # caught. Ctrl-C must stay Ctrl-C; mapping it to "the linter is broken"
     # would be its own small lie.
     #
+    # `Errno::EPIPE` is the same lie arriving by the shell's ordinary
+    # end-of-pipe. `specguard-lint … | head`, a quitting pager, a CI log
+    # tailer that stopped reading — none of these are the linter failing, and
+    # the run itself is correct: the verdict was computed and the reader
+    # simply stopped listening. Left in the bands it fabricates a 2 two
+    # different ways (SPGD-1288): a mid-report EPIPE reaches the backstop and
+    # reads as `internal error:`; and because `Open3.capture3` flushes THIS
+    # process's buffered stdout while setting up the validator child, the
+    # same EPIPE can surface from inside {ValidatorBackend::Runner#run},
+    # whose `SystemCallError` rescue — written for a child that cannot
+    # execute — re-wraps it as a `ValidatorError`, accusing the configured
+    # backend of a fault that does not exist. {Runner#run} passes the EPIPE
+    # through as itself, and the rescue below it here, placed ahead of both
+    # bands so it dominates them, yields the code the run had already
+    # computed: the contract's own guarantee, that the exit code reports the
+    # annotations, survives a truncated pipe. When the EPIPE fires before
+    # that computation — the reader closing while the validator is still
+    # running — there is no computed code to yield and none may be invented:
+    # {EXIT_OK} stands, because nothing reached the reader and neither
+    # "malformed annotations" nor "the linter is broken" was measured. This
+    # is a decision about what the shell is told, recorded here for the same
+    # reason the one above is.
+    #
     # == All failures, not the first
     #
     # SPGD-12 §1 step 4 says the linter "exits 1 on the *first* malformed
@@ -163,6 +186,17 @@ module SpecGuard
                        json: options[:json], ok: code == EXIT_OK)
 
         code
+      rescue Errno::EPIPE
+        # The pipe's reader stopped listening — `| head`, a quitting pager, a
+        # CI log tailer. The run is correct and its verdict stands; yield it
+        # rather than the backstop's "the tool is broken". `code` is nil when
+        # the EPIPE fired before the verdict was computed (the reader closed
+        # while the validator was still running), and then {EXIT_OK} stands:
+        # a bare `code` would be nil, `exit(nil)` in bin/specguard-lint
+        # raises TypeError and hands the shell 1 — the code this contract
+        # has already spent on "malformed annotations". See the class
+        # comment.
+        code || EXIT_OK
       rescue UsageError, ValidatorError => e
         @stderr.puts "specguard-lint: error: #{e.message}"
         EXIT_MISUSE

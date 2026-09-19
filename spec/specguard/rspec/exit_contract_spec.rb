@@ -359,5 +359,134 @@ RSpec.describe "the specguard-lint exit contract" do
       expect(lint("--json", fixture_path("broken_intent_spec.rb"))).to eq(1)
       expect(lint("--json", "--bogus")).to eq(2)
     end
+
+    # SPGD-1288. A truncating consumer — `| head`, a quitting pager, a CI log
+    # tailer — closes the read end of the pipe while the linter is still
+    # writing, and the linter's next stdout write raises Errno::EPIPE. That
+    # exception used to fabricate a 2 twice over: mid-report it reached the
+    # internal-error backstop, and — because `Open3.capture3` flushes this
+    # process's own buffered stdout while setting up the validator child —
+    # the same EPIPE could surface from inside the backend invocation and be
+    # re-wrapped as a ValidatorError accusing the configured binary. The
+    # carve-out yields the code the run had already computed (see the CLI
+    # class comment for the decision and its justification), so these pin
+    # the code the SHELL sees, in a real process over a real pipe: a
+    # StringIO stdout cannot raise EPIPE, so no library-level example can
+    # express this.
+    describe "a truncating pipe" do
+      def lint_exe
+        File.expand_path("../../../bin/specguard-lint", __dir__)
+      end
+
+      # 1000 malformed annotations at ~130 reported bytes each clear the
+      # kernel's 64 KiB pipe buffer with margin. Below the buffer the writer
+      # never blocks on a closed pipe, no EPIPE is raised, and a truncation
+      # example would pass on the unfixed tree while pinning nothing — the
+      # false negative measured when this defect was diagnosed (a 60-file
+      # fixture agreed with its own control).
+      #
+      # The annotation is assembled rather than written literally: a literal
+      # token and this payload on one line would themselves be a malformed
+      # annotation — the payload fails the schema on purpose, it is what the
+      # corpus's exit 1 is made of — and this spec file must not carry a
+      # finding the linter under test would report. Splitting the token
+      # keeps the source scan clean while the written file gets the real
+      # thing.
+      MALFORMED_PAYLOAD = '{entity:"Order",action:"total",behavior:"sums"}'
+      ANNOTATION_TOKEN = "@inte" "nt:"
+
+      def write_malformed_corpus(dir)
+        annotation = "# #{ANNOTATION_TOKEN} #{MALFORMED_PAYLOAD}"
+        Array.new(1000) do |i|
+          path = File.join(dir, "pipe_#{i}_spec.rb")
+          File.write(path, <<~RUBY)
+            RSpec.describe(Order) do
+              #{annotation}
+              it "sums" do
+                expect(order.total).to eq(90)
+              end
+            end
+          RUBY
+          path
+        end
+      end
+
+      # Spawns the real executable with stdout on a real pipe, hands the
+      # read end to the block — which plays the consumer: reads what it
+      # wants, hangs up when it wants — and returns the exit status the
+      # shell would see, with stderr drained to EOF.
+      def lint_behind_pipe(*args)
+        _stdin, stdout, stderr, wait_thr = Open3.popen3(RbConfig.ruby, lint_exe, *args)
+        yield stdout
+        stdout.close unless stdout.closed?
+        err = stderr.read
+        [wait_thr.value.exitstatus, err]
+      end
+
+      # @intent: { entity: "specguard-lint executable", action: "keep the verdict behind a truncating pipe", behavior: "when the consumer stops reading early the shell still gets the verdict the run computed, and stderr carries no internal error", layer: "integration" }
+      it "hands the shell the computed verdict when the reader stops early" do
+        Dir.mktmpdir do |dir|
+          code, err = lint_behind_pipe(*write_malformed_corpus(dir)) do |stdout|
+            8.times { stdout.gets } # the consumer has its lines and stops reading
+          end
+
+          expect(code).to eq(1)
+          expect(err).not_to include("internal error")
+        end
+      end
+
+      # @intent: { entity: "specguard-lint executable", action: "keep the verdict behind a truncating pipe", behavior: "the json renderer behaves identically under truncation, handing the shell the computed verdict with no internal error", layer: "integration" }
+      it "hands the shell the computed verdict under --json too" do
+        Dir.mktmpdir do |dir|
+          files = write_malformed_corpus(dir)
+          code, err = lint_behind_pipe("--json", *files) do |stdout|
+            stdout.read(1024) # the consumer takes its chunk of the document and stops
+          end
+
+          expect(code).to eq(1)
+          expect(err).not_to include("internal error")
+        end
+      end
+
+      # The second carrier, and why a rescue-clause reshuffle inside the
+      # existing bands could not have fixed this ticket alone: with the
+      # reader gone before the linter has written anything, the EPIPE fires
+      # inside `Open3.capture3`'s flush of THIS process's stdout — from
+      # inside the backend invocation, where the `SystemCallError` rescue
+      # re-wrapped it as "the validator could not be executed". It must
+      # surface as itself and yield EXIT_OK: the verdict had not been
+      # computed when the pipe closed, and no code may be invented for it
+      # (see the CLI class comment). The fixture is small on purpose — its
+      # output fits the pipe buffer, so the EPIPE can only ever be that
+      # flush, never a mid-report write — which makes the expected code
+      # deterministic rather than timing-dependent.
+      # @intent: { entity: "specguard-lint executable", action: "keep the verdict behind a truncating pipe", behavior: "a reader that hangs up before any output is not reported as a validator fault, and the shell gets zero", layer: "integration" }
+      it "does not accuse the validator when the reader is gone before any output" do
+        code, err = lint_behind_pipe(fixture_path("broken_intent_spec.rb")) do |_stdout|
+          # the consumer hangs up immediately; nothing is read
+        end
+
+        expect(code).to eq(0)
+        expect(err).not_to include("could not be executed")
+        expect(err).not_to include("internal error")
+      end
+
+      # The control that makes the examples above mean "pipe closure" and
+      # not "large output": a consumer that drains everything — the `| tail`
+      # reading — gets the baseline code on the same corpus. The size
+      # assertion is the fixture's own precondition: if the corpus ever
+      # stops clearing the kernel's 64 KiB pipe buffer, the truncation
+      # examples above would pass on the unfixed tree and pin nothing, and
+      # this is the line that says so.
+      # @intent: { entity: "specguard-lint executable", action: "keep the verdict behind a truncating pipe", behavior: "a consumer that drains the whole pipe gets the baseline code on the same corpus, whose output clears the kernel pipe buffer", layer: "integration" }
+      it "keeps the baseline code when the consumer drains the whole pipe" do
+        Dir.mktmpdir do |dir|
+          out, _err, status = Open3.capture3(RbConfig.ruby, lint_exe, *write_malformed_corpus(dir))
+
+          expect(out.bytesize).to be > 64 * 1024
+          expect(status.exitstatus).to eq(1)
+        end
+      end
+    end
   end
 end

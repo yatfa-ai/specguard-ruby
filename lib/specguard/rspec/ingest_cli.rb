@@ -49,6 +49,20 @@ module SpecGuard
     # `Interrupt`, `SignalException` and `SystemExit` are deliberately not
     # caught. Ctrl-C halfway through a 40-line file must stay Ctrl-C.
     #
+    # `Errno::EPIPE` joins them, and for the shell's side of the same reason
+    # (SPGD-1288). A truncated report — `--list` into `head`, a CI log
+    # tailer that stopped reading — is not this tool failing:
+    # the deliveries all happened and the per-line verdicts are in hand, and
+    # the reader simply stopped listening. Left to the backstop it is a
+    # fabricated 2 with an `internal error:` line — on `--list`, a 0 → 2
+    # flip on a clean listing. So the rescue below catches it ahead of the
+    # bands and yields the code the run had already computed: {#exit_code}
+    # over the results when they exist, {EXIT_OK} when the pipe closed
+    # before any verdict did — the `--list` path builds none, and a run that
+    # reported nothing has no verdict for an exit code to carry. On the
+    # delivery path a truncated report that exits 2 is exiting with its
+    # legitimate `:undelivered` code, not the backstop's.
+    #
     # == Where the line between 1 and 2 actually falls
     #
     # Not where {Transport::Result} draws it. That struct answers `:rejected`
@@ -402,6 +416,15 @@ module SpecGuard
 
         report(source, results, json: options.json)
         exit_code(results)
+      rescue Errno::EPIPE
+        # The report's reader stopped listening — `| head`, a quitting pager,
+        # a CI log tailer. The deliveries happened and the per-line verdicts
+        # are in hand, so the code is the run's own, recomputed from
+        # `results`, not the backstop's "the tool is broken". `results` is
+        # nil on the `--list` path, which builds none, and when the pipe
+        # closed before any delivery was made; then {EXIT_OK} stands. See
+        # the class comment.
+        results ? exit_code(results) : EXIT_OK
       rescue UsageError => e
         @stderr.puts "specguard-ingest: error: #{e.message}"
         EXIT_MISUSE
