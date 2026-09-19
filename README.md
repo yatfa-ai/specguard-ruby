@@ -71,9 +71,10 @@ empty on a clean checkout. `--changed=<base>` overrides the base for pipelines
 that know better. Selection also takes in **untracked** files: a brand-new
 spec that has not been `git add`ed is part of what the branch changed, whether
 or not the change is committed yet. One `git ls-files --others
---exclude-standard` call per run is unioned with the diff — `.gitignore`d
-paths (scratch directories, vendored code, build output) never enter the
-selection — and untracked files obey the same scoping as diffed ones, so an
+--exclude-standard` call per run is unioned with the diff —
+`--exclude-standard` keeps `.gitignore`d paths (scratch directories, vendored
+code, build output) out of the untracked leg alone — and untracked files obey
+the same scoping as diffed ones, so an
 untracked spec outside the current directory is counted as outside, not
 checked. When the untracked leg contributed, the `checked N spec files changed
 since <base>` line says `including M untracked`. `--changed` applies the same
