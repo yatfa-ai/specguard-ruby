@@ -1237,6 +1237,84 @@ RSpec.describe SpecGuard::RSpec::CLI do
       )
     end
 
+    # SPGD-1267's third counter made a third pairwise combination possible,
+    # and it pinned only the fence's solo arm. The fence clause has to
+    # survive alongside BOTH of the older causes: deleting it leaves every
+    # older pin green (neither of the two examples above ever exercises the
+    # fence), and the reason drops back to naming two of three causes — the
+    # reader does the arithmetic and concludes the fenced file was checked.
+    # All three clauses must appear together, in the ladder's order, as one
+    # shape.
+    # @intent: { entity: "CLI", action: "explain an empty changed selection", behavior: "when outside-root, unreadable and fenced files all emptied the selection all three causes are named in one ordered shape", layer: "unit" }
+    it "names all three exclusion causes in one ordered shape when outside-root, unreadable and fenced files coincide" do
+      repo_with_nested_spec do |dir|
+        # The dangling symlink is the `unreadable` branch; the vendored spec
+        # under the cwd is the fence branch (the fence reads every path
+        # component, so `vendor` catches it while it stays under the current
+        # directory); the helper's committed sibling spec sits above the cwd
+        # and is the `outside_root` branch.
+        File.symlink("missing_target.rb", File.join(dir, "sub/broken_spec.rb"))
+        vendored = File.join(dir, "sub/vendor/bundle/spec")
+        FileUtils.mkdir_p(vendored)
+        File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
+        git("add", "-A", chdir: dir)
+        git("commit", "-q", "-m", "add a broken symlink spec and a vendored spec", chdir: dir)
+
+        Dir.chdir(File.join(dir, "sub")) { cli.run(["--changed"]) }
+      end
+
+      expect(err).to include("selected 0 spec files")
+      # One shape, not three `include`s — the same reasoning as the two-cause
+      # example above.
+      expect(err).to match(
+        /3 changed spec files against \S+, but 1 is outside \S+ \(--changed selects only files under the current directory\) and 1 could not be read and 1 in dependency or build directories/
+      )
+    end
+
+    # The fence's solo arm is pinned above ("names the directory fence when
+    # it empties a changed selection"); this is the arm that arm can
+    # silently swallow. If the `unreadable + fence` clause is ever deleted,
+    # control falls through to the solo arm, whose "all in dependency or
+    # build directories" is a STRONGER claim than the truth: the unreadable
+    # file vanishes from the explanation entirely. The negative matcher is
+    # what turns that lie into a failure.
+    # @intent: { entity: "CLI", action: "explain an empty changed selection", behavior: "when the unreadable files and the fence both emptied the selection both are named and the all-fenced claim is not made", layer: "unit" }
+    it "names the unreadable file alongside the fence instead of claiming every match was fenced" do
+      base = nil
+      Dir.mktmpdir do |dir|
+        git("init", "-q", "--initial-branch=main", chdir: dir)
+        git("config", "user.email", "t@example.com", chdir: dir)
+        git("config", "user.name", "T", chdir: dir)
+        FileUtils.mkdir_p(File.join(dir, "spec"))
+        File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+        git("add", "-A", chdir: dir)
+        git("commit", "-q", "-m", "base", chdir: dir)
+        git("checkout", "-q", "-b", "feature", chdir: dir)
+        # One dangling symlink (the `unreadable` branch) and one vendored
+        # spec (the fence branch), both under the repo root so
+        # `outside_root` stays at zero — this is the two-cause arm the
+        # ladder reaches without ever leaving the current directory.
+        File.symlink("missing_target.rb", File.join(dir, "spec/broken_spec.rb"))
+        vendored = File.join(dir, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec")
+        FileUtils.mkdir_p(vendored)
+        File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
+        git("add", "-A", chdir: dir)
+        git("commit", "-q", "-m", "add a broken symlink spec and a vendored spec", chdir: dir)
+
+        base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
+        Dir.chdir(dir) { cli.run(["--changed"]) }
+      end
+
+      expect(err).to include("selected 0 spec files")
+      expect(err).to include(
+        "2 changed spec files against #{base} could not be read " \
+        "and 1 in dependency or build directories"
+      )
+      # The fall-through lie: without this arm, the solo fence arm answers
+      # and asserts `all`.
+      expect(err).not_to include("all in dependency or build directories")
+    end
+
     # AC honesty across frameworks: on a Minitest-only repository the silence
     # must not be explained in `*_spec.rb` vocabulary the tree does not use —
     # that message reads as a conclusion and stops the reader looking.
