@@ -4,8 +4,8 @@ require "open3"
 
 # The load-time separation between the gem's two halves.
 #
-# `specguard-rspec.gemspec` declares exactly one runtime dependency —
-# `json_schemer`. `rspec` is a **development** gem here, listed only in the
+# `specguard-ruby.gemspec` declares exactly one runtime dependency —
+# `json`. `rspec` is a **development** gem here, listed only in the
 # Gemfile. `bin/specguard-lint` loads `specguard/rspec`, so anyone who installed
 # this gem purely to lint annotations must be able to load that on a machine
 # with no RSpec at all: their CI lint step may well be a `gem install` in a
