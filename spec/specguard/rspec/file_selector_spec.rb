@@ -189,6 +189,62 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
 
       expect(described_class.select(root: root).skipped).to eq(0)
     end
+
+    # The fence's membership census. The examples above pin `vendor`
+    # behaviourally and bound `skipped` at a count — and a count is satisfied by
+    # ANY two members, so it pins cardinality and never membership: measured on
+    # this suite, deleting `dist`, `coverage`, `tmp` and `log` from the constant
+    # left every example green while re-opening the walk to a bundled tree's
+    # generated specs (SimpleCov's report dir, scratch under `tmp/` and `log/`).
+    # This census drives all six REACHABLE members and names each one
+    # LITERALLY — a pin deriving its expectation from the constant itself
+    # mutates with the constant and can never fail, which is exactly what let
+    # that four-member deletion pass unnoticed.
+    #
+    # Six, not eight: `Dir.glob` without `File::FNM_DOTMATCH` never descends
+    # into hidden directories, so `.git` and `.test-build` never reach
+    # `skipped_directory?` — the next example pins that structural fact.
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "a spec under each of the six glob-reachable fence directories is fenced, with every member named literally", layer: "unit" }
+    it "skips a spec file under each of the six glob-reachable fence directories" do
+      expect(described_class::SKIPPED_DIRECTORIES)
+        .to include("node_modules", "dist", "coverage", "vendor", "tmp", "log")
+
+      write(root, "node_modules/left-pad/spec/left_pad_spec.rb")
+      write(root, "dist/bundle/index_spec.rb")
+      write(root, "coverage/report/order_spec.rb")
+      write(root, "vendor/bundle/ruby/3.3.0/gems/left-pad-1.0.0/spec/vendored_spec.rb")
+      write(root, "tmp/cache/bootsnap_spec.rb")
+      write(root, "log/rotate/order_spec.rb")
+      write(root, "spec/models/order_spec.rb")
+
+      selection = described_class.select(root: root)
+
+      expect(selection.files).to eq(["spec/models/order_spec.rb"])
+      expect(selection.skipped).to eq(6)
+    end
+
+    # The fence declares two members the walk can structurally never see: with
+    # no `File::FNM_DOTMATCH`, `Dir.glob` does not descend into hidden
+    # directories, so `.git` and `.test-build` never reach
+    # `skipped_directory?` — the constant's own comment calls `.git`
+    # belt-and-braces, named so the fence reads complete beside its TypeScript
+    # twin. The honest pin is therefore double: the pair stays DECLARED, and a
+    # tree holding specs under both still reports `skipped == 0` — asserting
+    # eight counted here would fail on correct code and invite a later cycle to
+    # "fix" the pin by counting the uncountable.
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "the two hidden fence members stay declared while specs under them are excluded by the walk itself, never counted as skipped", layer: "unit" }
+    it "declares the two hidden fence members that the walk never reaches, without counting them as skipped" do
+      expect(described_class::SKIPPED_DIRECTORIES).to include(".git", ".test-build")
+
+      write(root, ".git/hooks/order_spec.rb")
+      write(root, ".test-build/cache/scratch_spec.rb")
+      write(root, "spec/models/order_spec.rb")
+
+      selection = described_class.select(root: root)
+
+      expect(selection.files).to eq(["spec/models/order_spec.rb"])
+      expect(selection.skipped).to eq(0)
+    end
   end
 
   describe "--changed" do
