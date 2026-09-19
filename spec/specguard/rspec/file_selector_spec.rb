@@ -111,6 +111,84 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
 
       expect(described_class.select(root: root).files).to eq(["test/models/user_test.rb"])
     end
+
+    # The default walk is fenced out of dependency and build directories
+    # (`SKIPPED_DIRECTORIES`, ported from the TypeScript client's answer and
+    # widened by `vendor`/`tmp`/`log`). A bundled Rails tree carries thousands
+    # of third-party gem specs under `vendor/bundle/` — code the user did not
+    # write and cannot edit — and a walk that adopts them fails the run over
+    # their annotations and charges the coverage note for them.
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "a vendored spec under vendor/bundle is not selected by the default walk", layer: "unit" }
+    it "does not select a vendored *_spec.rb under vendor/bundle" do
+      write(root, "spec/models/order_spec.rb")
+      write(root, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec/vendored_spec.rb")
+
+      expect(described_class.select(root: root).files).to eq(["spec/models/order_spec.rb"])
+    end
+
+    # The fence matches whole directory SEGMENTS, never substrings: a helper
+    # directory whose name merely contains a fenced word is ordinary project
+    # code, and so is a file whose own basename contains one — the path's last
+    # component is the file, not a directory it lives in.
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "a path whose segment or basename merely contains a fenced name as a substring is still selected", layer: "unit" }
+    it "still selects paths that merely contain a fenced name as a substring" do
+      write(root, "spec/vendor_helpers/order_spec.rb")
+      write(root, "spec/tmpfile_spec.rb")
+
+      expect(described_class.select(root: root).files).to eq(
+        ["spec/tmpfile_spec.rb", "spec/vendor_helpers/order_spec.rb"]
+      )
+    end
+
+    # The regression guard for the fence's relative-path constraint: the fence
+    # must decide on the path RELATIVE to `root`, never the absolute one.
+    # Every fixture root this suite builds lives under `Dir.mktmpdir` — a
+    # directory *named* `tmp` — so a fence reading absolute paths would read
+    # that `tmp` as a fenced segment and drop the whole tree, failing this
+    # example loudly instead of quietly emptying every selection.
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "a tree with nothing vendored selects unchanged even when the root's own absolute path carries a fenced name", layer: "unit" }
+    it "selects a fenced-free tree unchanged even when root itself sits under a fenced directory name" do
+      write(root, "spec/models/order_spec.rb")
+      write(root, "test/models/user_test.rb")
+
+      expect(described_class.select(root: root).files).to eq(
+        ["spec/models/order_spec.rb", "test/models/user_test.rb"]
+      )
+    end
+
+    # The fence is a name list, not `git ls-files`: the default walk works
+    # outside a git repository — exactly where `--changed` correctly refuses —
+    # and a git-based fence would break it there.
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "the fenced default walk still selects outside a git repository", layer: "unit" }
+    it "selects normally outside a git repository" do
+      write(root, "spec/models/order_spec.rb")
+      write(root, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec/vendored_spec.rb")
+
+      expect(File).not_to exist(File.join(root, ".git"))
+      expect(described_class.select(root: root).files).to eq(["spec/models/order_spec.rb"])
+    end
+
+    # The fence's disclosure: how many files were removed rides the selection,
+    # so the CLI can say so instead of narrowing silently. Zero when nothing
+    # was removed — the byte-identical case.
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "the selection carries how many files the directory fence removed, zero when none", layer: "unit" }
+    it "counts the files the directory fence removed" do
+      write(root, "spec/models/order_spec.rb")
+      write(root, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec/vendored_spec.rb")
+      write(root, "node_modules/left-pad/spec/left_pad_spec.rb")
+
+      selection = described_class.select(root: root)
+
+      expect(selection.files).to eq(["spec/models/order_spec.rb"])
+      expect(selection.skipped).to eq(2)
+    end
+
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "a tree with nothing fenced reports a zero fence count", layer: "unit" }
+    it "reports a zero fence count when nothing was removed" do
+      write(root, "spec/models/order_spec.rb")
+
+      expect(described_class.select(root: root).skipped).to eq(0)
+    end
   end
 
   describe "--changed" do

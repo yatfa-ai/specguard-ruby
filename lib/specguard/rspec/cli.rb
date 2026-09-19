@@ -262,21 +262,43 @@ module SpecGuard
       # of record; the json renderer printing the SAME bytes is what makes
       # "the machine reads the provenance the human does" a property of the
       # code rather than a promise two copies could drift apart on.
+      #
+      # The `:all` count names its fence: `FileSelector.select_all` refuses
+      # dependency/build directories (`file_selector.rb`
+      # `SKIPPED_DIRECTORIES`), and a fence that actually removed files says
+      # how many — the narrowing must never be silent. The clause is
+      # count-gated exactly like the untracked one, so a run whose fence
+      # removed nothing prints byte-identically to before the fence existed.
       def selection_line(selection)
         untracked = selection.mode == :changed ? selection.stats&.untracked.to_i : 0
+        skipped = selection.mode == :all ? selection.skipped : 0
         "specguard-lint: checked #{selection.count} spec file#{'s' unless selection.count == 1}" \
           "#{" changed since #{selection.base}" if selection.mode == :changed}" \
           "#{" under #{Dir.pwd}" if selection.mode == :all}" \
-          "#{" including #{untracked} untracked" if untracked.positive?}"
+          "#{" including #{untracked} untracked" if untracked.positive?}" \
+          "#{" skipping #{skipped} in dependency or build directories" if skipped.positive?}"
       end
 
       # `:explicit` is absent by construction — an explicit Selection is only
       # built from a non-empty file list, so it can never be empty.
       def empty_reason(selection)
-        case selection.mode
-        when :changed then changed_empty_reason(selection)
-        else "no *_spec.rb or *_test.rb file found under #{Dir.pwd}"
-        end
+        return changed_empty_reason(selection) if selection.mode == :changed
+        # An `:all` selection the fence emptied must not blame the tree for
+        # holding no spec files — the files existed and the fence removed
+        # them, and "no file found" is the confidently wrong reason this
+        # ladder exists to prevent.
+        return all_fenced_reason(selection) if selection.mode == :all && selection.skipped.positive?
+
+        "no *_spec.rb or *_test.rb file found under #{Dir.pwd}"
+      end
+
+      # The fence arm of the `:all` empty reason: every matching file the walk
+      # found was inside a {SpecGuard::RSpec::FileSelector::SKIPPED_DIRECTORIES}
+      # directory, so the silence is the fence's, not the tree's.
+      def all_fenced_reason(selection)
+        n = selection.skipped
+        "#{n} *_spec.rb or *_test.rb file#{'s' unless n == 1} found, " \
+          "all in dependency or build directories"
       end
 
       # Names the filter that actually emptied the selection. Saying "nothing in
