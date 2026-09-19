@@ -27,7 +27,7 @@ $LOAD_PATH.unshift(source_lib) unless $LOAD_PATH.include?(source_lib)
 begin
   require "specguard/rspec"
 rescue ScriptError, StandardError => e
-  warn "specguard-lint: error: could not load specguard-rspec: #{e.class}: #{e.message}"
+  warn "specguard-lint: error: could not load specguard-ruby: #{e.class}: #{e.message}"
   exit 2
 end
 
