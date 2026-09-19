@@ -16,13 +16,16 @@ module SpecGuard
     # diff names paths, not directories, and a changed test file is a test
     # file wherever the author put it.
     #
-    # The default walk also carries a fixed directory fence
-    # ({SKIPPED_DIRECTORIES}): dependency, build-output, scratch and VCS
-    # directories are never selected, so a bundled tree's `vendor/bundle/`
-    # gem specs are neither reported on nor failed over — third-party code
-    # the user did not write. `--changed` draws the same boundary from
-    # `.gitignore` (`--exclude-standard`) for free; the walk, which must keep
-    # working outside a repository, carries it as a name list instead.
+    # Both modes carry a fixed directory fence ({SKIPPED_DIRECTORIES}):
+    # dependency, build-output, scratch and VCS directories are never
+    # selected, so a bundled tree's `vendor/bundle/` gem specs are neither
+    # reported on nor failed over — third-party code the user did not write.
+    # The walk, which must keep working outside a repository, carries the
+    # boundary as a name list; `--changed` applies the same name list to the
+    # paths git hands back, because a tracked file is never subject to
+    # `.gitignore` and the diff leg therefore has no fence of its own.
+    # `--exclude-standard` additionally removes ignored *untracked* paths —
+    # it stacks with the name list in `--changed` and is no substitute for it.
     #
     # == Why `--changed` is not `git diff --name-only`
     #
@@ -111,8 +114,12 @@ module SpecGuard
     # the toplevel so its repo-root-relative output flows through the same
     # scoping as the diff's (from a subdirectory `ls-files` emits
     # cwd-relative paths, which would defeat it). `--exclude-standard` is the
-    # boundary: `.gitignore`d paths — scratch directories, vendored code, build
-    # output — never enter the selection. The two legs are disjoint by
+    # untracked leg's boundary: `.gitignore`d paths — scratch directories,
+    # vendored code, build output — never enter through it. It is a second
+    # removal, not the selection's only fence: ignored *tracked* paths still
+    # arrive on the diff leg (git never applies ignore rules to tracked
+    # files), which is why the {SKIPPED_DIRECTORIES} fence applies to the
+    # union as a whole. The two legs are disjoint by
     # construction (an untracked path is never a diff path), so the union
     # cannot double-count; {Stats.untracked} says how many of the selected
     # files arrived via the untracked leg, and the empty-reason ladder's
@@ -149,11 +156,14 @@ module SpecGuard
       #   * `tmp` — Rails' scratch directory (caches, pids, sockets).
       #   * `log` — Rails' log directory.
       #
-      # `--changed` gets this boundary for free — `--exclude-standard` keeps
-      # `.gitignore`d paths (scratch directories, vendored code, build output)
-      # out of its untracked leg. The walk has no git to ask, because it must
-      # keep working outside a repository exactly where `--changed` correctly
-      # refuses, so it carries the boundary as a name list instead. The list
+      # `--changed` applies this same list itself: a tracked file is never
+      # subject to `.gitignore`, so `--exclude-standard` — which keeps
+      # `.gitignore`d paths (scratch directories, vendored code, build
+      # output) out of the untracked leg alone — cannot fence the diff leg
+      # and is an additional removal, never a substitute. The walk has no
+      # git to ask, because it must keep working outside a repository exactly
+      # where `--changed` correctly refuses, so it carries the boundary as a
+      # name list too. The list
       # is matched against whole directory SEGMENTS of the root-relative path
       # (see {skipped_directory?}), never as a substring — `spec/vendor_helpers/`
       # is project code — and never against the absolute path.
@@ -193,16 +203,18 @@ module SpecGuard
 
       # What a selection produced, plus enough context to report it honestly.
       #
-      # `skipped` is the fence count for the `:all` mode ({SKIPPED_DIRECTORIES}),
-      # defaulted to 0 so every other construction site is untouched. It
+      # `skipped` is the {SKIPPED_DIRECTORIES} fence count, carried by BOTH
+      # selection modes — `:all`'s walk and `:changed`'s union alike; an
+      # `:explicit` selection bypasses the fence and always reads 0 —
+      # defaulted to 0 so every construction site is untouched. It
       # deliberately rides `Selection` rather than a new `Stats` member:
       # `Stats` is documented as the `--changed` empty-reason ladder ("why an
-      # empty `--changed` selection is empty") and the fence is neither
-      # `--changed`-bound nor an emptiness explanation — it is report context
-      # for a selection that may be perfectly full. `Selection` is what this
-      # file already uses to carry per-mode context (`base`, `note`, `stats`
-      # are all `--changed`-only and defaulted the same way), so the count
-      # follows that precedent instead of widening `Stats`'s contract.
+      # empty `--changed` selection is empty") and the fence is not an
+      # emptiness explanation — it is report context for a selection that may
+      # be perfectly full. `Selection` is what this file already uses to
+      # carry per-mode context (`base`, `note`, `stats` are all
+      # `--changed`-only and defaulted the same way), so the count follows
+      # that precedent instead of widening `Stats`'s contract.
       Selection = Data.define(:files, :mode, :base, :note, :stats, :skipped) do
         def initialize(files:, mode:, base: nil, note: nil, stats: nil, skipped: 0)
           super
@@ -276,20 +288,23 @@ module SpecGuard
         # consult it (a failed diff, a thin base note).
         is_shallow = shallow_probe(root)
 
-        files, stats = changed_files(resolved, root, is_shallow)
+        files, stats, skipped = changed_files(resolved, root, is_shallow)
 
         Selection.new(files: files, mode: :changed, base: resolved,
-                      note: base_note(resolved, base_kind, root, is_shallow), stats: stats)
+                      note: base_note(resolved, base_kind, root, is_shallow), stats: stats,
+                      skipped: skipped)
       end
 
       # Resolves git's repo-root-relative output into paths relative to `root`,
-      # dropping (and counting) everything the two scoping rules exclude. The
+      # dropping (and counting) everything the scoping rules and the
+      # {SKIPPED_DIRECTORIES} fence exclude. The
       # name set is the union of the diff leg and the untracked leg; each name
       # is tagged with its leg so {Stats.untracked} can attribute the selected
       # files the diff never saw. The legs are disjoint by construction (an
       # untracked path is never a diff path), so the plain union cannot
       # double-count and needs no dedup.
-      # @return [[Array<String>, Stats]]
+      # @return [[Array<String>, Stats, Integer]] the selected files, the
+      #   filter stats, and how many files the directory fence removed.
       def changed_files(base, root, is_shallow)
         names = diff_names(base, root, is_shallow).map { |name| [name, false] }
 
@@ -307,6 +322,7 @@ module SpecGuard
         outside = 0
         unreadable = 0
         untracked = 0
+        skipped = 0
         specs.each do |(name, was_untracked)|
           absolute = prefix + name
           relative = strip_prefix(absolute, root_prefix)
@@ -314,6 +330,16 @@ module SpecGuard
             outside += 1
           elsif !File.file?(absolute)
             unreadable += 1
+          elsif skipped_directory?(relative)
+            # The same {SKIPPED_DIRECTORIES} fence {select_all} applies,
+            # decided on the root-relative path at the same grain. It sits
+            # after the scoping arms so it counts a different exclusion and
+            # never perturbs `outside_root`/`unreadable`; because the union
+            # is already materialized here, one placement covers BOTH legs —
+            # the diff leg (where `.gitignore` cannot act, git never applies
+            # ignore rules to tracked files) and the untracked leg on a
+            # repository that does not ignore its vendored tree.
+            skipped += 1
           else
             files << relative
             untracked += 1 if was_untracked
@@ -322,7 +348,8 @@ module SpecGuard
 
         [files.sort,
          Stats.new(changed: names.length, spec_matches: specs.length,
-                   outside_root: outside, unreadable: unreadable, untracked: untracked)]
+                   outside_root: outside, unreadable: unreadable, untracked: untracked),
+         skipped]
       end
 
       # `--diff-filter=d` drops deleted paths — `git diff --name-only` lists

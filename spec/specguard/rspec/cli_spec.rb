@@ -191,6 +191,73 @@ RSpec.describe SpecGuard::RSpec::CLI do
       expect(line).not_to include("untracked")
     end
 
+    # SPGD-1267: the fence applies in `--changed` too, and the count-gated
+    # disclosure rides the changed-mode sentence exactly as it rides the
+    # default walk's. The vendored spec here is COMMITTED — the
+    # dependency-bump shape — so the diff leg produced it and `.gitignore`
+    # played no part in its removal.
+    # @intent: { entity: "CLI report", action: "state what was checked", behavior: "the changed-mode checked-count names how many files the directory fence removed", layer: "unit" }
+    it "says how many files the changed selection fenced out of dependency or build directories" do
+      base = nil
+      Dir.mktmpdir do |dir|
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
+        FileUtils.mkdir_p(File.join(dir, "spec"))
+        File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
+        File.write(File.join(dir, "spec/base_spec.rb"), "# edited\n")
+        vendored = File.join(dir, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec")
+        FileUtils.mkdir_p(vendored)
+        File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "bundle update", chdir: dir)
+
+        base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
+        Dir.chdir(dir) { cli.run(["--changed"]) }
+      end
+
+      line = out.lines.grep(/\Aspecguard-lint: checked .* changed since/).first
+      expect(line).to eq(
+        "specguard-lint: checked 1 spec file changed since #{base} " \
+        "skipping 1 in dependency or build directories\n"
+      )
+    end
+
+    # The SPGD-1118 shape in this mode: a fence that EMPTIES a changed
+    # selection must name the fence, not fall through to a confidently wrong
+    # "nothing changed" — the files changed, and the fence removed them.
+    # @intent: { entity: "CLI", action: "explain an empty changed selection", behavior: "an empty changed selection whose every match was fenced names the fence rather than claiming nothing changed", layer: "unit" }
+    it "names the directory fence when it empties a changed selection" do
+      base = nil
+      Dir.mktmpdir do |dir|
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
+        FileUtils.mkdir_p(File.join(dir, "spec"))
+        File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
+        vendored = File.join(dir, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec")
+        FileUtils.mkdir_p(vendored)
+        File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "bundle update", chdir: dir)
+
+        base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
+        Dir.chdir(dir) { cli.run(["--changed"]) }
+      end
+
+      expect(err).to include(
+        "selected 0 spec files — 1 changed spec file against #{base}, " \
+        "all in dependency or build directories"
+      )
+      expect(err).not_to include("nothing changed against")
+    end
+
     # The reason ladder keeps its truth: "nothing changed against <base>" can
     # now only fire when nothing tracked changed AND no untracked spec exists.
     # A branch whose only spec is a brand-new untracked file gets checked, not

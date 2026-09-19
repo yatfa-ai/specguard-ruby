@@ -60,7 +60,7 @@ directory names, so `spec/vendor_helpers/` is still yours. A bundled Rails tree
 (`bundle install --deployment` → `vendor/bundle/`) ships thousands of third-party gem
 specs; the walk neither reports on them nor fails over their annotations, and the
 zero-annotation coverage note counts only files you wrote — the same material
-`--changed` keeps out via `.gitignore`. When the fence removed files, the
+`--changed` fences out with the same directory list. When the fence removed files, the
 `checked N spec files` line says how many (`skipping M in dependency or build
 directories`); a file named explicitly on the command line is always checked.
 
@@ -76,7 +76,11 @@ paths (scratch directories, vendored code, build output) never enter the
 selection — and untracked files obey the same scoping as diffed ones, so an
 untracked spec outside the current directory is counted as outside, not
 checked. When the untracked leg contributed, the `checked N spec files changed
-since <base>` line says `including M untracked`.
+since <base>` line says `including M untracked`. `--changed` applies the same
+dependency/build directory fence to everything it selects: a tracked file is
+never subject to `.gitignore`, so the diff leg needs the fence regardless —
+and when the fence removed files, the selection line says how many
+(`skipping M in dependency or build directories`).
 In a **shallow** checkout — the default depth-1 `git clone`
 behind `actions/checkout@v4` — the merge base with the default branch is not
 in the clone's history, so the derived base is HEAD itself and the selection
