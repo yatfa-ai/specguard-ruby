@@ -33,10 +33,11 @@ module SpecGuard
     # without re-deriving the distinction from an error message.
     class UsageError < Error; end
 
-    # The opt-in Go validator backend could not produce a verdict — the binary
-    # named by `SPECGUARD_VALIDATE_INTENT` is missing, will not execute, exited
-    # with a code that is not a verdict, or emitted something this cannot read
-    # as a report.
+    # The Go validator backend could not produce a verdict — the binary named
+    # by `SPECGUARD_VALIDATE_INTENT`, or the default binary the backend
+    # resolves when that is blank, is missing, will not execute, exited with a
+    # code that is not a verdict, or emitted something this cannot read as a
+    # report.
     #
     # Typed separately from {UsageError} because the two are different
     # accusations ("you invoked me wrongly" vs "the tool I was told to use is
