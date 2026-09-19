@@ -263,15 +263,15 @@ module SpecGuard
       # "the machine reads the provenance the human does" a property of the
       # code rather than a promise two copies could drift apart on.
       #
-      # The `:all` count names its fence: `FileSelector.select_all` refuses
-      # dependency/build directories (`file_selector.rb`
-      # `SKIPPED_DIRECTORIES`), and a fence that actually removed files says
+      # The fence count names its fence: both selection modes apply
+      # `FileSelector`'s `SKIPPED_DIRECTORIES` (the default walk and
+      # `--changed` alike), and a fence that actually removed files says
       # how many — the narrowing must never be silent. The clause is
       # count-gated exactly like the untracked one, so a run whose fence
       # removed nothing prints byte-identically to before the fence existed.
       def selection_line(selection)
         untracked = selection.mode == :changed ? selection.stats&.untracked.to_i : 0
-        skipped = selection.mode == :all ? selection.skipped : 0
+        skipped = selection.skipped.to_i
         "specguard-lint: checked #{selection.count} spec file#{'s' unless selection.count == 1}" \
           "#{" changed since #{selection.base}" if selection.mode == :changed}" \
           "#{" under #{Dir.pwd}" if selection.mode == :all}" \
@@ -320,28 +320,40 @@ module SpecGuard
           "#{stats.changed} file#{'s' unless stats.changed == 1} changed against #{base}, " \
             "none matching *_spec.rb or *_test.rb"
         else
-          changed_excluded_reason(stats, base)
+          changed_excluded_reason(stats, base, selection.skipped)
         end
       end
 
-      # `outside_root` and `unreadable` are independent counters over disjoint
-      # branches of the same partition (`file_selector.rb`), so both can be
-      # positive at once. Naming only the first one found is the failure the
+      # `outside_root`, `unreadable` and the directory-fence count are
+      # independent counters over disjoint branches of the same partition
+      # (`file_selector.rb`), so any two of them can be positive at once.
+      # Naming only the first one found is the failure the
       # comment above forbids: the reader does the arithmetic, sees that
       # `spec_matches - outside_root` files are unaccounted for, and concludes
       # they were checked. They were not — the selection is empty. So the
-      # clauses are additive, and a selection emptied by both causes says so.
-      def changed_excluded_reason(stats, base)
+      # clauses are additive, and a selection emptied by several causes says
+      # so.
+      def changed_excluded_reason(stats, base, skipped)
         matched = "#{stats.spec_matches} changed spec file#{'s' unless stats.spec_matches == 1} against #{base}"
 
-        # Nothing outside the root: `unreadable` is then the only filter left
-        # that can have emptied the selection, so it needs no count of its own.
-        return "#{matched} could not be read" unless stats.outside_root.positive?
-
-        reason = "#{matched}, but #{stats.outside_root} #{stats.outside_root == 1 ? 'is' : 'are'} " \
-                 "outside #{Dir.pwd} (--changed selects only files under the current directory)"
-        reason += " and #{stats.unreadable} could not be read" if stats.unreadable.positive?
-        reason
+        if stats.outside_root.positive?
+          reason = "#{matched}, but #{stats.outside_root} #{stats.outside_root == 1 ? 'is' : 'are'} " \
+                   "outside #{Dir.pwd} (--changed selects only files under the current directory)"
+          reason += " and #{stats.unreadable} could not be read" if stats.unreadable.positive?
+          reason += " and #{skipped} in dependency or build directories" if skipped.positive?
+          reason
+        elsif stats.unreadable.positive? && skipped.positive?
+          "#{matched} could not be read and #{skipped} in dependency or build directories"
+        elsif skipped.positive?
+          # Every matching file the diff produced was fenced: the shape
+          # {all_fenced_reason} uses, in this mode's vocabulary.
+          "#{matched}, all in dependency or build directories"
+        else
+          # Nothing outside the root and nothing fenced: `unreadable` is then
+          # the only filter left that can have emptied the selection, so it
+          # needs no count of its own.
+          "#{matched} could not be read"
+        end
       end
 
       # The FAIL block, in the shape `bin/validate-intent --source` emits: two

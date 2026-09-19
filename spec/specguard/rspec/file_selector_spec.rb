@@ -625,6 +625,102 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
       end
     end
 
+    describe "the dependency/build directory fence" do
+      # SPGD-1267: `--changed` is fenced by the SAME name list as the default
+      # walk — not by `.gitignore`. A tracked file is never subject to
+      # `.gitignore`, and `--exclude-standard` is an `ls-files` argument that
+      # exists only on the untracked leg, so the diff leg (the leg a
+      # dependency-bump PR's committed vendored spec arrives on) has no
+      # gitignore fence of its own. Directory names below are spelled as
+      # LITERALS on purpose: a pin that read its expectation off
+      # `SKIPPED_DIRECTORIES` could never fail.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "a tracked vendored spec committed on the branch is fenced out of the changed selection like the default walk fences it", layer: "unit" }
+      it "does not select a tracked vendored spec from the diff leg" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        File.write(File.join(root, "spec/base_spec.rb"), "# edited\n")
+        write(root, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec/vendored_spec.rb")
+        commit(root, "bundle update — the bump ships a vendored spec")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/base_spec.rb"])
+        expect(selection.skipped).to eq(1)
+        # The leg attribution: nothing here was untracked, so this pin cannot
+        # pass via --exclude-standard — the name list did the fencing.
+        expect(selection.stats.untracked).to eq(0)
+      end
+
+      # The untracked leg needs the fence too: a repository that does not
+      # `.gitignore` its vendored tree is exactly the repository
+      # `--exclude-standard` says nothing about.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "an untracked vendored spec in a repository with no .gitignore covering it is still fenced out", layer: "unit" }
+      it "does not select an untracked vendored spec when no .gitignore covers it" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        File.write(File.join(root, "spec/base_spec.rb"), "# edited\n")
+        write(root, "vendor/bundle/ruby/3.2.0/gems/foo-1.0/spec/foo_spec.rb")
+
+        # Precondition: the vendored path is untracked and NOT ignored — no
+        # .gitignore anywhere covers it, so `--exclude-standard` cannot have
+        # removed it; the name list did.
+        listed, = Open3.capture2("git", "ls-files", "--others", "--exclude-standard", chdir: root)
+        expect(listed).to include("vendor/bundle/ruby/3.2.0/gems/foo-1.0/spec/foo_spec.rb")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/base_spec.rb"])
+        expect(selection.skipped).to eq(1)
+        # The fenced name entered the union (it counts in spec_matches) and
+        # was removed there — not by the untracked leg's ignore rules.
+        expect(selection.stats.spec_matches).to eq(2)
+      end
+
+      # Segment matching, never substring matching, and never the basename —
+      # the same two guarantees the default walk's fence carries, asserted in
+      # the one mode where the paths come from git rather than a glob.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "changed paths whose directory segment or basename merely contains a fenced name are still selected", layer: "unit" }
+      it "still selects changed paths that merely contain a fenced name as a substring" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        write(root, "spec/tmpfile_spec.rb")
+        write(root, "spec/vendor_helpers/order_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "spec/tmpfile_spec.rb", "# edited\n")
+        write(root, "spec/vendor_helpers/user_spec.rb")
+        commit(root, "touch helper and tmpfile specs")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(
+          ["spec/tmpfile_spec.rb", "spec/vendor_helpers/user_spec.rb"]
+        )
+        expect(selection.skipped).to eq(0)
+      end
+
+      # The zero case: a fence that removed nothing leaves both the selection
+      # and the disclosure exactly as they were before the fence existed.
+      # @intent: { entity: "FileSelector", action: "select changed files", behavior: "a changed selection with nothing fenced reports the pre-fence files and a zero fence count", layer: "unit" }
+      it "reports a zero fence count and an unchanged selection when nothing was fenced" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "spec/added_spec.rb")
+        commit(root, "add a spec")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/added_spec.rb"])
+        expect(selection.skipped).to eq(0)
+      end
+    end
+
     describe "explaining a thin selection" do
       # Both fallbacks leave the base at HEAD, and they are NOT the same thing:
       # one is a normal default-branch build, the other means --changed has
