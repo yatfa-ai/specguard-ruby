@@ -1154,6 +1154,20 @@ module SpecGuard
 
           check_status(status, stderr)
           parse_document(stdout, stderr)
+        rescue Errno::EPIPE
+          # An EPIPE here is about THIS process's own stdout, not the child:
+          # `Open3.capture3` flushes the parent's buffered output while
+          # setting up the child, and when the reader of that pipe — `| head`,
+          # a quitting pager, a CI log tailer — has gone, it is that flush
+          # which raises. The rescue below was written for a child that
+          # cannot execute; re-wrapping this one would report "the validator
+          # could not be executed", accusing the configured backend of a
+          # fault that does not exist, and {CLI}'s EPIPE band — which sits
+          # ahead of its `ValidatorError` band precisely for this — would
+          # never see the exception at all. So it propagates as itself.
+          # Every OTHER `SystemCallError` keeps the rescue below: ENOENT,
+          # EACCES, ENOEXEC and E2BIG remain validator failures and exit 2.
+          raise
         rescue SystemCallError => e
           # ENOENT/EACCES between #verify! and here (a binary deleted or
           # chmod'ed mid-run), ENOEXEC for a file that is not a program, E2BIG

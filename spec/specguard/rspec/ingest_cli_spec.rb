@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "open3"
 require "stringio"
 require "tmpdir"
 
@@ -1873,6 +1874,89 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
     it "answers only 0, 1 or 2 across every shape above" do
       expect([described_class::EXIT_OK, described_class::EXIT_REFUSED, described_class::EXIT_MISUSE])
         .to eq([0, 1, 2])
+    end
+  end
+
+  # SPGD-1288. The linter's EPIPE carve-out, transferred: a truncating
+  # consumer — `| head`, a CI log tailer that stopped reading — closes the
+  # read end of the pipe while the report is still being written, and the
+  # next stdout write raises Errno::EPIPE, which used to reach the backstop
+  # and fabricate a 2 with an `internal error:` line. On `--list` that was
+  # a 0 → 2 flip on a clean listing; on the delivery path the exit code
+  # alone cannot show the defect — 2 is the legitimate `:undelivered` code
+  # there — so the pin is the stderr line. Real process, real pipe: a
+  # StringIO stdout cannot raise EPIPE, so no library-level example can
+  # express this.
+  describe "a truncating pipe" do
+    def ingest_exe
+      File.expand_path("../../../bin/specguard-ingest", __dir__)
+    end
+
+    # 2000 whole-run lines at ~100 listed bytes each clear the kernel's
+    # 64 KiB pipe buffer with margin. Below the buffer the writer never
+    # blocks on a closed pipe, no EPIPE is raised, and a truncation example
+    # would pass on the unfixed tree while pinning nothing.
+    def big_sink(line_count = 2000)
+      path = File.join(@dir, "big_test_results.jsonl")
+      content = Array.new(line_count) { |i| JSON.generate(run_payload(ci_run_id: i.to_s)) }.join("\n")
+      File.write(path, content << "\n")
+      path
+    end
+
+    # Spawns the real executable with stdout on a real pipe, hands the read
+    # end to the block — which plays the consumer: reads what it wants,
+    # hangs up when it wants — and returns the exit status the shell would
+    # see, with stderr drained to EOF.
+    def ingest_behind_pipe(process_env, *args)
+      _stdin, stdout, stderr, wait_thr = Open3.popen3(process_env, RbConfig.ruby, ingest_exe, *args)
+      yield stdout
+      stdout.close unless stdout.closed?
+      err = stderr.read
+      [wait_thr.value.exitstatus, err]
+    end
+
+    # The discard endpoint: nothing listens on port 9, so every line is
+    # instantly `:undelivered` — the delivery path's real 2 — with no server
+    # to stand up and no network touched.
+    DISCARD_ENDPOINT = { "SPECGUARD_ENDPOINT" => "http://127.0.0.1:9/ingest",
+                         "SPECGUARD_API_KEY" => "sgk_abc123" }.freeze
+
+    # @intent: { entity: "specguard-ingest", action: "keep the verdict behind a truncating pipe", behavior: "a listing piped into a consumer that stops reading early still exits zero with no internal error", layer: "integration" }
+    it "lists clean when the consumer stops reading early" do
+      code, err = ingest_behind_pipe({}, "--list", big_sink) do |stdout|
+        5.times { stdout.gets } # the consumer has its lines and stops reading
+      end
+
+      expect(code).to eq(0)
+      expect(err).not_to include("internal error")
+    end
+
+    # @intent: { entity: "specguard-ingest", action: "keep the verdict behind a truncating pipe", behavior: "a truncated delivery report exits with its legitimate undelivered verdict and no internal error on stderr", layer: "integration" }
+    it "reports the legitimate delivery verdict when the delivery report is truncated" do
+      code, err = ingest_behind_pipe(DISCARD_ENDPOINT, big_sink) do |stdout|
+        5.times { stdout.gets } # the report starts only after every delivery; take some, stop reading
+      end
+
+      # 2 is this path's real answer — every line went undelivered — so the
+      # exit code alone cannot distinguish the fixed tree from the broken
+      # one here; the pin is that stderr carries no internal error line.
+      expect(code).to eq(2)
+      expect(err).not_to include("internal error")
+    end
+
+    # The control that makes the examples above mean "pipe closure" and not
+    # "large output": a consumer that drains everything gets the baseline
+    # code on the same sink. The size assertion is the fixture's own
+    # precondition — if the sink ever stops clearing the kernel's 64 KiB
+    # pipe buffer, the truncation examples would pass on the unfixed tree
+    # and pin nothing.
+    # @intent: { entity: "specguard-ingest", action: "keep the verdict behind a truncating pipe", behavior: "a consumer that drains the whole listing gets the baseline code, whose output clears the kernel pipe buffer", layer: "integration" }
+    it "keeps the baseline code when the consumer drains the whole pipe" do
+      out, _err, status = Open3.capture3(DISCARD_ENDPOINT, RbConfig.ruby, ingest_exe,
+                                         "--list", big_sink)
+
+      expect(out.bytesize).to be > 64 * 1024
+      expect(status.exitstatus).to eq(0)
     end
   end
 
