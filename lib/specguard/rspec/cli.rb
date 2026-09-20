@@ -377,7 +377,9 @@ module SpecGuard
           reason += " and #{skipped} in dependency or build directories" if skipped.positive?
           reason
         elsif stats.unreadable.positive? && skipped.positive?
-          "#{matched} could not be read and #{skipped} in dependency or build directories"
+          # Both causes at once, so `matched` is their sum — the bare prefix
+          # is true only on the solo arms below, where it equals the one counter.
+          "#{matched}, but #{stats.unreadable} could not be read and #{skipped} in dependency or build directories"
         elsif skipped.positive?
           # Every matching file the diff produced was fenced: the shape
           # {all_fenced_reason} uses, in this mode's vocabulary.

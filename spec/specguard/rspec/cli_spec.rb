@@ -1307,12 +1307,54 @@ RSpec.describe SpecGuard::RSpec::CLI do
 
       expect(err).to include("selected 0 spec files")
       expect(err).to include(
-        "2 changed spec files against #{base} could not be read " \
+        "2 changed spec files against #{base}, but 1 could not be read " \
         "and 1 in dependency or build directories"
       )
       # The fall-through lie: without this arm, the solo fence arm answers
       # and asserts `all`.
       expect(err).not_to include("all in dependency or build directories")
+    end
+
+    # SPGD-1293's arithmetic pin, on the shape the defect was measured
+    # against: with both causes present the sentence names each with its
+    # own count and the counts SUM to the matched total — the pre-fix
+    # sentence prefixed the matched count onto the unreadable clause and
+    # read "5 … could not be read and 3 in dependency" against 5 matched
+    # files. The lopsided 2/3 counts also catch a swap of the two
+    # counters, which the 1/1 fixture above cannot distinguish.
+    # @intent: { entity: "CLI", action: "explain an empty changed selection", behavior: "when the unreadable files and the fence both emptied the selection each cause carries its own count and the two counts sum to the matched total", layer: "unit" }
+    it "carries each cause's own count when the unreadable files and the fence emptied the selection" do
+      base = nil
+      Dir.mktmpdir do |dir|
+        git("init", "-q", "--initial-branch=main", chdir: dir)
+        git("config", "user.email", "t@example.com", chdir: dir)
+        git("config", "user.name", "T", chdir: dir)
+        FileUtils.mkdir_p(File.join(dir, "spec"))
+        File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
+        git("add", "-A", chdir: dir)
+        git("commit", "-q", "-m", "base", chdir: dir)
+        git("checkout", "-q", "-b", "feature", chdir: dir)
+        # Two dangling symlinks (the `unreadable` branch) and three vendored
+        # specs (the fence branch), all under the repo root so
+        # `outside_root` stays at zero — the two-cause arm, with counts too
+        # lopsided to alias.
+        File.symlink("missing_target.rb", File.join(dir, "spec/broken_one_spec.rb"))
+        File.symlink("missing_target.rb", File.join(dir, "spec/broken_two_spec.rb"))
+        vendored = File.join(dir, "vendor/bundle/spec")
+        FileUtils.mkdir_p(vendored)
+        3.times { |i| File.write(File.join(vendored, "vendored_#{i}_spec.rb"), "# vendored\n") }
+        git("add", "-A", chdir: dir)
+        git("commit", "-q", "-m", "add broken symlink specs and vendored specs", chdir: dir)
+
+        base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
+        Dir.chdir(dir) { cli.run(["--changed"]) }
+      end
+
+      expect(err).to include("selected 0 spec files")
+      expect(err).to include(
+        "5 changed spec files against #{base}, but 2 could not be read " \
+        "and 3 in dependency or build directories"
+      )
     end
 
     # AC honesty across frameworks: on a Minitest-only repository the silence
