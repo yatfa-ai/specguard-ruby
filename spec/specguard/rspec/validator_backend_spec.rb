@@ -1301,24 +1301,47 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   #
   # This row shares the Go column with difference 3 (`no file at this path`) and
   # that is the whole content of it. The binary's arguments are glob PATTERNS
-  # and a match is filtered to regular files, so a directory and a name matching
-  # nothing arrive at the same place: one `no-match` finding, which this gem
-  # folds into KIND_READ and re-words, because it has no patterns to report on.
-  # The Ruby path opens the path it was given, so it has an errno and says which
-  # one — `Is a directory @ io_fread - …` rather than `No such file or
-  # directory @ rb_sysopen - …`. Ruby distinguishes the two; the backend cannot,
-  # and does not pretend to.
+  # and a match is filtered to REGULAR files, so a non-regular path and a name
+  # matching nothing arrive at the same place: one `no-match` finding, which
+  # this gem folds into KIND_READ and re-words, because it has no patterns to
+  # report on. The Ruby path opens the path it was given, so it has an errno
+  # and could say which one; the backend cannot, and does not pretend to.
   #
-  # spec/fixtures/validator/not-a-regular-file.json is RECORDED from
-  # `validate-intent-go --source --json spec/fixtures/payloads
-  # spec/fixtures/order_spec.rb`, run from the gem root.
+  # (A DIRECTORY used to be this row's example of a non-regular path and is no
+  # longer one of its subjects at all — oti SPGD-1299 made the binary EXPAND a
+  # directory rather than refuse it, and SPGD-1303 made the client refuse one
+  # before the backend is reached. The glob-filtering property this row names
+  # is unchanged; only the path demonstrating it moved.)
   #
-  # `spec/fixtures/payloads` is a directory that already exists for its own
-  # reason, so this asserts against the repository rather than against a
-  # directory a test made — and the first example fails loudly if it ever stops
-  # being one.
+  # spec/fixtures/validator/not-a-regular-file.json is RE-RECORDED (SPGD-1303)
+  # from `validate-intent --source --json /dev/null
+  # spec/fixtures/order_spec.rb`, run from the gem root against a binary built
+  # from open-test-intent 71ada88.
+  #
+  # THE SUBJECT MOVED, AND IT MOVED FOR A REASON OUTSIDE THIS REPO. This row
+  # used to name `spec/fixtures/payloads`, a DIRECTORY, because a directory was
+  # the most convenient path that exists and is not a regular file. Two
+  # independent commits retired that choice, and neither is a change to what
+  # this row asserts:
+  #
+  #   * oti SPGD-1299 taught the binary to expand a bare directory argument as
+  #     `DIR/**`, so a directory stopped producing `no-match` at all — measured
+  #     against 71ada88, `--source --json spec/fixtures/payloads` reports
+  #     `files: 9, failed: 0` and not one finding of any kind. The recording
+  #     was therefore ALREADY STALE on its own terms, describing an answer the
+  #     binary no longer gives for that path;
+  #   * SPGD-1303 made a directory named as an explicit path a client-side
+  #     exit-2 refusal, so `run_cli` can no longer reach the backend with one.
+  #
+  # `/dev/null` is a character device: it EXISTS, it is not a regular file, it
+  # is not a directory, and it is readable as empty — so it keeps this row's
+  # exact subject (the binary's glob semantics folding a non-regular path into
+  # `no-match`, which this gem re-words) while depending on neither retired
+  # behaviour. The live binary answers for it byte-identically to the recording
+  # below, which is why the re-record is a re-grounding and not a weakening.
+  # The first example still fails loudly if the path ever stops being one.
   describe "a path that is not a regular file" do
-    let(:paths) { %w[spec/fixtures/payloads spec/fixtures/order_spec.rb] }
+    let(:paths) { %w[/dev/null spec/fixtures/order_spec.rb] }
     let(:recorded) { File.read("spec/fixtures/validator/not-a-regular-file.json") }
 
     def both_ways
@@ -1330,13 +1353,17 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       "could not read file: "
     end
 
-    # Non-vacuity: the whole comparison is about a path that exists and is not a
-    # regular file. If it ever became either a file or nothing, every assertion
-    # below would still pass while testing difference 3 over again.
+    # Non-vacuity: the whole comparison is about a path that EXISTS and is not
+    # a regular file. If it ever became either a file or nothing, every
+    # assertion below would still pass while testing difference 3 over again.
+    # The directory clause is deliberately gone: a directory is no longer this
+    # row's subject (see the block comment), and asserting one here would now
+    # assert the retired premise rather than the live one.
     # @intent: { entity: "ValidatorBackend", action: "replay the non-regular-path corpus", behavior: "the run is genuinely against a path that exists and is not a regular file", layer: "integration" }
     it "is running against a path that exists and is not a regular file" do
-      expect(File.directory?(paths.first)).to be(true)
+      expect(File.exist?(paths.first)).to be(true)
       expect(File.file?(paths.first)).to be(false)
+      expect(File.directory?(paths.first)).to be(false)
       expect(File.file?(paths.last)).to be(true)
     end
 
@@ -1363,7 +1390,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       (go_stdout, *, _) = both_ways.first
       locations = ->(stdout) { fail_lines(stdout).map { |line| line.split(" — ").first } }
 
-      expect(locations.call(go_stdout)).to eq(["FAIL  spec/fixtures/payloads"])
+      expect(locations.call(go_stdout)).to eq(["FAIL  /dev/null"])
     end
 
     # @intent: { entity: "ValidatorBackend", action: "replay the non-regular-path corpus", behavior: "it counts as an unread file rather than a checked annotation", layer: "integration" }
@@ -1390,15 +1417,17 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     end
 
 
-    # The two spellings README.md's table quotes. Ruby's is pinned only as far
-    # as the errno phrase `Errno::EISDIR` contributes — the `@ io_fread - <path>`
-    # tail is Ruby's own and has moved across versions, exactly the trap the
-    # parse block documents.
+    # The wording the gem mints for a non-regular path. Ruby's own errno
+    # phrasing is pinned nowhere — the `@ io_fread - <path>` tail is Ruby's own
+    # and has moved across versions, exactly the trap the parse block
+    # documents.
     # SPGD-867 rewrote this example: the Ruby errno half is gone with the Ruby
     # arm, and what survives is the property that still matters — the binary's
-    # glob semantics fold a directory and a missing name into the same
+    # glob semantics fold a non-regular path and a missing name into the same
     # `no-match` answer, which this gem re-words rather than inventing an
-    # errno it never had.
+    # errno it never had. The negative assertion below still names Ruby's
+    # directory errno because it is the errno-shaped string this code path is
+    # most likely to leak, whatever the path's flavour.
     # @intent: { entity: "ValidatorBackend", action: "replay the non-regular-path corpus", behavior: "a non-regular path gets the no-match wording the gem mints", layer: "integration" }
     it "reports the no-match wording the gem mints for a non-regular path" do
       (go_stdout, *, _) = both_ways.first
