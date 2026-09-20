@@ -9,12 +9,12 @@
   },
   "findings": [
     {
-      "file": "spec/fixtures/payloads",
+      "file": "/dev/null",
       "line": null,
       "ok": false,
       "kind": "no-match",
       "errors": [
-        "no file(s) match spec/fixtures/payloads"
+        "no file(s) match /dev/null"
       ]
     },
     {

@@ -1157,6 +1157,138 @@ RSpec.describe SpecGuard::RSpec::CLI do
     end
   end
 
+  # SPGD-1303. The shared `validate-intent` binary learned to expand a bare
+  # directory argument as `DIR/**` (oti SPGD-1299), and the client was never
+  # told: one argument stopped meaning one file, so `specguard-lint <dir>`
+  # validated a whole subtree behind a header that said `checked 1 spec file`,
+  # a summary that said `checked 3 @intent annotations`, and a zero-annotation
+  # note that named the directory as carrying none — three sentences in one
+  # document contradicting each other, and at its sharpest a directory holding
+  # one VALID annotation exiting 0 beside that false note.
+  #
+  # Honest client-side accounting is impossible: the binary's document carries
+  # only FINDINGS, so a CLEAN file in the expanded subtree appears in no
+  # finding and "checked N" can never count what was actually validated.
+  # Refusal is the only coherent client-side state, and it is the rule the ts
+  # client's explicit arm already enforces with this exact sentence.
+  describe "a directory named as an explicit path" do
+    def dir_with_malformed_spec
+      dir = Dir.mktmpdir("specguard-cli-dirarg")
+      File.write(File.join(dir, "m_spec.rb"), <<~RUBY)
+        # @intent: { entity: "Order" }
+        RSpec.describe(Order) { it('totals') { expect(1).to eq(1) } }
+      RUBY
+      dir
+    end
+
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "a directory named as an explicit path is refused with the misuse exit code rather than validated as a subtree", layer: "unit" }
+    it "exits 2, the misuse code, rather than validating the subtree" do
+      Dir.mktmpdir do |dir|
+        expect(cli.run([dir])).to eq(described_class::EXIT_MISUSE)
+      end
+    end
+
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "the refusal names the directory and the remediation on stderr", layer: "unit" }
+    it "names the directory and the remediation on stderr" do
+      Dir.mktmpdir do |dir|
+        cli.run([dir])
+
+        expect(err).to include(
+          "specguard-lint: error: #{dir} is a directory; name files or run without paths\n"
+        )
+      end
+    end
+
+    # The refusal happens before any validation, so the run produced no
+    # verdicts and owes stdout nothing — the SPGD-305 exit-2 rule.
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "the refused run checks nothing and says nothing on stdout", layer: "unit" }
+    it "checks nothing and says nothing on stdout" do
+      dir = dir_with_malformed_spec
+      cli.run([dir])
+
+      expect(out).to be_empty
+    ensure
+      FileUtils.remove_entry(dir)
+    end
+
+    # The false-note arm of the defect, pinned directly: the directory itself
+    # fell into `report_zero_annotation_files`' `bare` subtraction (its exact
+    # string match cannot see the expanded file paths the findings carry), so
+    # the run claimed the directory carried no annotations in the same breath
+    # as counting three inside it. Refusing before selection is what retires
+    # it — the note's predicate (SPGD-1158/1162) is untouched.
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "the zero-annotation note never fires for a directory holding annotated files", layer: "unit" }
+    it "never fires the zero-annotation note for a directory holding annotated files" do
+      dir = dir_with_malformed_spec
+      cli.run([dir])
+
+      expect(err).not_to include("no @intent annotations")
+    ensure
+      FileUtils.remove_entry(dir)
+    end
+
+    # `File.directory?` follows symlinks, so a symlink pointing at a directory
+    # is the same class of argument and gets the same refusal — named by the
+    # spelling the caller used, as every other path diagnostic here is.
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "a symlink pointing at a directory is refused like the directory it names", layer: "unit" }
+    it "refuses a symlink pointing at a directory" do
+      Dir.mktmpdir do |dir|
+        target = File.join(dir, "specs")
+        link = File.join(dir, "link")
+        FileUtils.mkdir_p(target)
+        File.symlink(target, link)
+
+        expect(cli.run([link])).to eq(described_class::EXIT_MISUSE)
+        expect(err).to include("#{link} is a directory; name files or run without paths")
+      end
+    end
+
+    # The over-refusal guard. A directory is refused; a FILE is not, and
+    # neither is a path that is not there. A nonexistent path is not a
+    # directory, so it still reaches the binary and still comes back as the
+    # no-match read finding at exit 1 — the typo case, which belongs to the
+    # binary's diagnostic (oti SPGD-1301) and must not be swallowed here.
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "a nonexistent path is not refused as a directory and still reaches the validator as a read finding", layer: "unit" }
+    it "does not refuse a nonexistent path as if it were a directory" do
+      Dir.mktmpdir do |dir|
+        missing = File.join(dir, "nope_spec.rb")
+
+        expect(cli.run([missing])).to eq(described_class::EXIT_MALFORMED)
+        expect(out).to include("could not read file")
+        expect(err).not_to include("is a directory")
+      end
+    end
+
+    # The file controls, pinned additively beside the refusal: the byte
+    # behaviour of a FILE argument is exactly what it was before the stat.
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "a file carrying a valid annotation still exits 0 with no note", layer: "unit" }
+    it "leaves a file with a valid annotation at exit 0 with no note" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "ok_spec.rb")
+        File.write(path, <<~RUBY)
+          # @intent: { entity: "Order", action: "total", behavior: "sums line totals into the order total", layer: "unit" }
+          RSpec.describe(Order) { it('totals') { expect(1).to eq(1) } }
+        RUBY
+
+        expect(cli.run([path])).to eq(described_class::EXIT_OK)
+        expect(err).not_to include("is a directory")
+        expect(err).not_to include("no @intent annotations")
+      end
+    end
+
+    # @intent: { entity: "CLI", action: "refuse a directory argument", behavior: "a file carrying a malformed annotation still exits 1 with its finding", layer: "unit" }
+    it "leaves a file with a malformed annotation at exit 1 with its finding" do
+      dir = dir_with_malformed_spec
+      path = File.join(dir, "m_spec.rb")
+
+      expect(cli.run([path])).to eq(described_class::EXIT_MALFORMED)
+      expect(out).to include("checked 1 @intent annotation, 1 malformed")
+      expect(err).not_to include("is a directory")
+    ensure
+      FileUtils.remove_entry(dir)
+    end
+  end
+
   describe "the reason given for an empty --changed selection" do
     # The blocker's real sting: the warning did not just fire on an empty
     # selection, it stated something FALSE — "nothing in the diff matched

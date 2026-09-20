@@ -248,6 +248,28 @@ module SpecGuard
                   "(named files are checked as given, --changed derives them from the diff)"
           end
 
+          # SPGD-1303: a directory named as an explicit path is refused, not
+          # expanded. The shared `validate-intent` binary learned to expand a
+          # bare directory as `DIR/**` (oti SPGD-1299), so one argument stopped
+          # meaning one file — and the client's document carries only FINDINGS,
+          # so a clean file in that subtree appears nowhere and "checked N spec
+          # files" can never count what was actually validated. The observed
+          # result was a run whose header said `checked 1 spec file`, whose
+          # summary said `checked 3 @intent annotations`, and whose
+          # zero-annotation note claimed the directory carried none — three
+          # mutually contradicting sentences, and at its sharpest an exit-0
+          # false green. Honest accounting is impossible here without an oti
+          # wire-contract change, so refusal is the only coherent client-side
+          # state. Same sentence as the ts client's `discover.ts` explicit arm.
+          # `File.directory?` follows symlinks, so a symlinked directory is the
+          # same class; a nonexistent path is NOT a directory and still reaches
+          # the binary, where the no-match finding belongs.
+          options[:files].each do |path|
+            next unless File.directory?(path)
+
+            raise UsageError, "#{path} is a directory; name files or run without paths"
+          end
+
           return FileSelector::Selection.new(files: options[:files], mode: :explicit)
         end
 

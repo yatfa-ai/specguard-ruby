@@ -95,7 +95,14 @@ genuinely bad ref. A selection that comes up empty stays exit `0` and says WHY
 on stderr — the exit contract is unchanged; only the WHY is truthful now.
 
 Files are **positional** (`specguard-lint spec/order_spec.rb`); there is no `--source` flag —
-that belongs to `validate-intent`, not to this one.
+that belongs to `validate-intent`, not to this one. Named paths must be **files**: a directory
+named as a positional argument is a usage error (exit `2`, `<path> is a directory; name files or
+run without paths`). The `validate-intent` binary would expand it as `DIR/**`, but its report
+carries only findings, so a clean file in that subtree appears nowhere and the linter could not
+honestly say what it checked — the run would contradict itself, counting one selected file beside
+several annotations and naming the directory as carrying none. Name the files, or pass no paths
+at all and let the walker select them. A path that does *not* exist is not refused here: it
+reaches the binary and comes back as a read finding, which is where a typo belongs.
 
 The linter is a thin CLI over the [`validate-intent`](https://github.com/yatfa-ai/open-test-intent)
 binary — the protocol's own reference implementation, which decides whether an annotation is valid
@@ -316,7 +323,9 @@ provenance line says which kind of "could not check" it was, in its own words:
 The gem's arguments are paths; the binary's are glob patterns. A path that matches nothing —
 missing, or not a regular file — reaches the gem as the same answer the binary gives both shapes
 (`no-match`), which the CLI re-words as `could not read file: no file at this path` and folds into
-the `read` kind. The binary's own UTF-8 refusal prose (`input is not well-formed UTF-8
+the `read` kind. A **directory** is not one of those shapes: the client refuses it up front (see
+"Files are positional" above), so it never reaches the binary and never becomes a read finding.
+The binary's own UTF-8 refusal prose (`input is not well-formed UTF-8
 (PROTOCOL.md §1.1 requires it)`) and parse-failure prose are passed through unaltered.
 
 Every way the backend can fail — the binary is missing, will not execute, exits with something that
