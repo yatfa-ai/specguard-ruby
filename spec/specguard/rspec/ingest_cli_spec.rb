@@ -758,9 +758,139 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
 
         expect(code).to eq(0)
         expect(err).to eq("specguard-ingest: warning: #{path} holds no runs to deliver " \
-                          "(2 lines not selected by --lines)\n")
+                          "(2 lines not selected by --lines; " \
+                          "--lines named 9-11, which the file does not have)\n")
         expect(server.requests).to be_empty
       end
+    end
+
+    # ⭐ The silence this clause exists to end. A spec naming a line the file
+    # does not have used to deliver whatever else matched and say nothing
+    # whatever about the number that matched nothing — byte-identically to the
+    # spec that named only the satisfied lines. The two are different intents
+    # and they now read differently, which is the whole of the claim.
+    # @intent: { entity: "specguard-ingest --lines", action: "name the absent lines", behavior: "a spec naming a line beyond the file is no longer byte-identical to the same spec without it, on the delivery path", layer: "unit" }
+    it "does not print a spec naming a line beyond the file as the satisfied spec, when delivering" do
+      path = sink(run_payload, run_payload, run_payload)
+      satisfied = StringIO.new
+      phantom = StringIO.new
+
+      StubIngestEndpoint.run do |server|
+        configured = env.merge("SPECGUARD_ENDPOINT" => server.endpoint)
+        described_class.new(stdout: satisfied, stderr: StringIO.new, env: configured).run(["--lines", "3", path])
+        described_class.new(stdout: phantom, stderr: StringIO.new, env: configured).run(["--lines", "3,99", path])
+      end
+
+      expect(satisfied.string).not_to eq(phantom.string)
+      expect(satisfied.string).not_to include("the file does not have")
+      expect(phantom.string).to include("--lines named 99, which the file does not have")
+    end
+
+    # The same claim on the preview path. `--list` is the documented route to
+    # the numbers, so a preview that under-reported would hand the user a set
+    # they did not send — the objection `#list_summary` is arranged around.
+    # @intent: { entity: "specguard-ingest --lines", action: "name the absent lines", behavior: "a spec naming a line beyond the file is no longer byte-identical to the same spec without it, on the listing path", layer: "unit" }
+    it "does not print a spec naming a line beyond the file as the satisfied spec, when listing" do
+      path = sink(run_payload, run_payload, run_payload)
+      satisfied = StringIO.new
+      phantom = StringIO.new
+
+      described_class.new(stdout: satisfied, stderr: StringIO.new, env: {}).run(["--list", "--lines", "3", path])
+      described_class.new(stdout: phantom, stderr: StringIO.new, env: {}).run(["--list", "--lines", "3,99", path])
+
+      expect(satisfied.string).not_to eq(phantom.string)
+      expect(satisfied.string).not_to include("the file does not have")
+      expect(phantom.string).to include("--lines named 99, which the file does not have")
+    end
+
+    # ⭐ The half-answered range, which the wholly-unanswered framing does not
+    # reach on its own. A range running past the end of the file has named lines
+    # that were typed and delivered nothing, exactly as a lone out-of-range
+    # number has, so the clause is computed over line NUMBERS rather than over
+    # entries — and it names the unanswered portion in the shorthand it was
+    # typed in, not the whole entry, because the satisfied half was honoured.
+    # @intent: { entity: "specguard-ingest --lines", action: "name the absent lines", behavior: "a range running past the end of the file names the unanswered portion and differs from the range that stops at the end", layer: "unit" }
+    it "names the portion of a range the file does not reach, and not the portion it does" do
+      path = sink(run_payload, run_payload, run_payload)
+      whole = StringIO.new
+      clipped = StringIO.new
+
+      described_class.new(stdout: whole, stderr: StringIO.new, env: {}).run(["--list", "--lines", "2-9", path])
+      described_class.new(stdout: clipped, stderr: StringIO.new, env: {}).run(["--list", "--lines", "2-3", path])
+
+      expect(whole.string).not_to eq(clipped.string)
+      expect(whole.string).to include("--lines named 4-9, which the file does not have")
+      expect(clipped.string).not_to include("the file does not have")
+    end
+
+    # ⭐ The typo and the empty file, asserted as two strings in ONE example so
+    # they cannot converge: a run that named lines the file does not have and a
+    # run over a file with nothing in it are different mistakes, and only one of
+    # them is the user's. Before the clause they were told apart only by a
+    # parenthetical whose count is the file's own length.
+    # @intent: { entity: "specguard-ingest --lines", action: "name the absent lines", behavior: "the warning for a spec naming nothing the file has states its own cause and differs from the empty-file warning", layer: "unit" }
+    it "warns differently for a spec naming nothing the file has and for an empty file" do
+      short = sink(run_payload, run_payload)
+      empty = File.join(@dir, "empty.jsonl")
+      File.write(empty, "")
+      typo_err = StringIO.new
+      empty_err = StringIO.new
+
+      described_class.new(stdout: StringIO.new, stderr: typo_err, env: {}).run(["--list", "--lines", "40-50", short])
+      described_class.new(stdout: StringIO.new, stderr: empty_err, env: {}).run(["--list", empty])
+
+      expect(typo_err.string).not_to eq(empty_err.string)
+      expect(typo_err.string).to include("--lines named 40-50, which the file does not have")
+      expect(empty_err.string).to eq("specguard-ingest: warning: #{empty} holds no runs to list\n")
+    end
+
+    # ⭐ The additive rule, which is `changed_excluded_reason`'s discipline in
+    # this command's vocabulary: every cause that applies is stated, none is
+    # dropped in favour of another and none is stated twice. A file that is at
+    # once blank-bearing, selected-away and shorter than the spec is the one
+    # file where all three can be checked against each other.
+    # @intent: { entity: "specguard-ingest --lines", action: "name the absent lines", behavior: "a file that is at once blank-bearing selected-away and short states each cause exactly once", layer: "unit" }
+    it "states the blank, the held-back and the absent causes together, each once" do
+      path = File.join(@dir, "gappy.jsonl")
+      File.write(path, "#{JSON.generate(run_payload)}\n\n#{JSON.generate(run_payload)}\n")
+      code = described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--list", "--lines", "1-2,9", path])
+
+      expect(code).to eq(0)
+      expect(out).to include("blank line skipped")
+      expect(out).to include("not selected by --lines")
+      expect(out).to include("--lines named 9, which the file does not have")
+      expect(out.scan("the file does not have").length).to eq(1)
+      expect(out.scan("blank line").length).to eq(1)
+    end
+
+    # ⭐ The one way the new clause could produce a self-contradicting summary.
+    # `blank` already carries "you named a line that exists and holds nothing",
+    # so a named blank line must report as blank and never also as absent — the
+    # clause is derived strictly from numbers past the end of the file, which is
+    # what makes that structural rather than incidental.
+    # @intent: { entity: "specguard-ingest --lines", action: "name the absent lines", behavior: "naming a line that exists and is blank reports it as blank only and never as absent", layer: "unit" }
+    it "reports a named blank line as blank and never as absent" do
+      path = File.join(@dir, "gappy.jsonl")
+      File.write(path, "#{JSON.generate(run_payload)}\n\n#{JSON.generate(run_payload)}\n")
+      code = described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--list", "--lines", "2", path])
+
+      expect(code).to eq(0)
+      expect(err).to include("blank line")
+      expect(err).not_to include("the file does not have")
+    end
+
+    # `--from-line` is a suffix, and a suffix past the end of the file already
+    # says so through the lines it held back. Widening the new clause to cover
+    # it would restate one fact as two.
+    # @intent: { entity: "specguard-ingest --from-line", action: "keep the absent clause narrow", behavior: "a resume point past the end of the file keeps its held-back wording and gains no named-absent clause", layer: "unit" }
+    it "does not name absent lines for a resume point past the end of the file" do
+      path = sink(run_payload, run_payload)
+      code = described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--list", "--from-line", "9", path])
+
+      expect(code).to eq(0)
+      expect(err).to eq("specguard-ingest: warning: #{path} holds no runs to list " \
+                        "(2 earlier lines skipped by --from-line)\n")
+      expect(err).not_to include("the file does not have")
     end
 
     # `--lines` sits in the same branch position the suffix test held, so the
@@ -839,7 +969,9 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
       code = described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--list", "--lines", "4", path])
 
       expect(code).to eq(0)
-      expect(err).to eq("specguard-ingest: warning: #{path} holds no runs to list (1 line not selected by --lines)\n")
+      expect(err).to eq("specguard-ingest: warning: #{path} holds no runs to list " \
+                        "(1 line not selected by --lines; " \
+                        "--lines named 4, which the file does not have)\n")
       expect(out).to be_empty
     end
 
@@ -1480,8 +1612,41 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
                                       "2 lines not selected by --lines")
       expect(summary).to eq(
         "lines" => 4, "attempted" => 3, "accepted" => 1, "refused" => 1, "undelivered" => 1,
-        "unparseable" => 1, "blank" => 0, "skipped" => 2, "selector" => "--lines"
+        "unparseable" => 1, "blank" => 0, "skipped" => 2, "absent" => nil, "selector" => "--lines"
       )
+    end
+
+    # ⭐ The machine channel. A satisfied selector and a phantom one produced an
+    # identical document, and the fact was derivable from no key in it —
+    # `skipped` counts lines of the file held back, so it structurally cannot
+    # carry a number the file never had. A bridge has to be able to see it.
+    # @intent: { entity: "specguard-ingest --json", action: "carry the absent lines", behavior: "the delivery document distinguishes a satisfied selector from one naming lines the file does not have", layer: "unit" }
+    it "distinguishes a satisfied selector from one naming absent lines, when delivering" do
+      path = sink(run_payload, run_payload, run_payload)
+
+      expect(deliver(["--json", "--lines", "3", path])).to eq(0)
+      expect(document["summary"]).to include("absent" => nil, "skipped" => 2)
+
+      phantom = StringIO.new
+      expect(deliver(["--json", "--lines", "3,99", path], stdout: phantom)).to eq(0)
+      expect(JSON.parse(phantom.string)["summary"]).to include("absent" => ["99"], "skipped" => 2)
+    end
+
+    # ⭐ The invariant `#report`'s comment states, on the one fact that is new:
+    # the text summary and the document are two renderings of ONE reading of the
+    # file, so they cannot disagree about which typed lines were absent. Asserted
+    # as the two actually agreeing on the same file and the same spec rather than
+    # as two independent expectations that happen to match.
+    # @intent: { entity: "specguard-ingest --json", action: "stay consistent", behavior: "the document and the text summary name the same absent lines for one file and one spec", layer: "unit" }
+    it "agrees with the text summary about which typed lines the file does not have" do
+      path = sink(run_payload, run_payload, run_payload)
+      plain = StringIO.new
+
+      expect(deliver(["--json", "--lines", "2-6,99", path])).to eq(0)
+      deliver(["--lines", "2-6,99", path], stdout: plain)
+
+      expect(document["summary"]["absent"]).to eq(%w[4-6 99])
+      expect(plain.string).to include("--lines named 4-6, 99, which the file does not have")
     end
 
     # @intent: { entity: "specguard-ingest --json", action: "stay consistent", behavior: "the summary names the resume flag when that is the selector that held lines back", layer: "unit" }
@@ -1629,6 +1794,23 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
         expect(JSON.parse(delivered.string)["lines"].map { |entry| entry["number"] }).to eq(listed)
       end
 
+      # ⭐ The listing half of the machine channel. `--list` is the documented
+      # route to the numbers, so a preview whose document under-reported would
+      # hand a bridge a set the delivery would not send.
+      # @intent: { entity: "specguard-ingest --json --list", action: "carry the absent lines", behavior: "the listing document distinguishes a satisfied selector from one naming lines the file does not have", layer: "unit" }
+      it "distinguishes a satisfied selector from one naming absent lines, when listing" do
+        path = sink(run_payload, run_payload, run_payload)
+        phantom = StringIO.new
+
+        described_class.new(stdout: stdout, stderr: StringIO.new, env: {}).run(["--list", "--json", "--lines", "3",
+                                                                               path])
+        described_class.new(stdout: phantom, stderr: StringIO.new, env: {}).run(["--list", "--json", "--lines", "2-9",
+                                                                                path])
+
+        expect(document["summary"]).to include("absent" => nil)
+        expect(JSON.parse(phantom.string)["summary"]).to include("absent" => ["4-9"])
+      end
+
       # The other half of criterion 5: the listing's document has to SAY nothing
       # was delivered, the way the text listing's summary says it in words. Every
       # delivery status is 0 and `attempted` is 0 — which is a statement, not an
@@ -1646,7 +1828,7 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
           expect(document["mode"]).to eq("list")
           expect(document["summary"]).to eq(
             "lines" => 2, "attempted" => 0, "accepted" => 0, "refused" => 0, "undelivered" => 0,
-            "unparseable" => 1, "blank" => 0, "skipped" => 0, "selector" => nil
+            "unparseable" => 1, "blank" => 0, "skipped" => 0, "absent" => nil, "selector" => nil
           )
           expect(document["foldings"]).to eq([])
         end
@@ -1777,7 +1959,8 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
         expect(document["lines"]).to eq([])
         expect(document["summary"]).to include("lines" => 0, "skipped" => 2, "selector" => "--lines")
         expect(err).to eq("specguard-ingest: warning: #{path} holds no runs to list " \
-                          "(2 lines not selected by --lines)\n")
+                          "(2 lines not selected by --lines; " \
+                          "--lines named 9-11, which the file does not have)\n")
       end
     end
 

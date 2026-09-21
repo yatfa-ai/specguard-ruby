@@ -349,7 +349,19 @@ module SpecGuard
       # the summary can say. The blanks and the skips are counted rather than
       # dropped because a summary that quietly narrows what it is summarising is
       # the failure this project keeps finding.
-      Source = Struct.new(:path, :lines, :blank, :skipped, :selector, keyword_init: true)
+      #
+      # `absent` is the same discipline applied one layer later, to the lines
+      # that were *typed* rather than to the lines that were read. A `--lines`
+      # entry can name a line past the end of the file, and such a number is not
+      # held back — there was nothing there to hold — so `skipped` cannot carry
+      # it and the file's own counts cannot state it. It is derived from the
+      # file's length in {#read_source} and rendered in the shorthand it was
+      # typed in, because the user acts on what they typed. Empty when the
+      # selector was fully satisfied, and empty under `--from-line`, whose
+      # past-the-end case is already a suffix that selected nothing.
+      #
+      # @return [Array<String>] `absent`, each entry a number or an `N-M` range
+      Source = Struct.new(:path, :lines, :blank, :skipped, :absent, :selector, keyword_init: true)
 
       # What the command line asked for. A struct rather than a bare path,
       # because `--from-line` is the second half of the same question — which
@@ -550,6 +562,7 @@ module SpecGuard
 
         parts << blank_clause(source) if source.blank.positive?
         parts << skipped_clause(source) if source.skipped.positive?
+        parts << absent_clause(source) if source.absent.any?
         parts << "nothing was delivered"
 
         parts.join("; ")
@@ -655,6 +668,12 @@ module SpecGuard
         lines = []
         blank = 0
         skipped = 0
+        # The file's length, counted rather than inferred: `with_index` is
+        # already running and discards its last `number`, and a counter that
+        # starts at 0 says "no lines" about an empty file where a nil would say
+        # "not known". It is what {#absent_entries} measures the typed numbers
+        # against.
+        length = 0
 
         # Numbered from the file, not from the payloads: a blank line still
         # advances the count, so line 12 in this report is line 12 in an editor.
@@ -670,6 +689,8 @@ module SpecGuard
         # the file still delivers. Swallowing it here would lose a line silently
         # and letting it raise would report a bug in this tool.
         File.foreach(path).with_index(1) do |text, number|
+          length = number
+
           if held_back?(number, options)
             skipped += 1
           elsif text.valid_encoding? && text.strip.empty?
@@ -680,6 +701,7 @@ module SpecGuard
         end
 
         Source.new(path: path, lines: lines, blank: blank, skipped: skipped,
+                   absent: absent_entries(options, length),
                    selector: options.line_set ? :line_set : :from_line)
       rescue SystemCallError, IOError => e
         raise UsageError, "could not read #{path}: #{e.message}"
@@ -693,6 +715,39 @@ module SpecGuard
         return !options.line_set.any? { |range| range.cover?(number) } if options.line_set
 
         number < options.from_line
+      end
+
+      # The typed numbers the file does not have, in the shorthand they were
+      # typed in.
+      #
+      # Computed over line NUMBERS rather than over entries, which is what makes
+      # a half-satisfied range the same fact as a wholly unsatisfied one: a
+      # range running past the end of the file has named lines that were typed
+      # and delivered nothing, exactly as a lone out-of-range number has. Each
+      # entry contributes only the portion above the file's length, so the
+      # clause names the unanswered part rather than the entry that was half
+      # honoured, and a range stays a range rather than becoming a list of
+      # numbers the user would have to read back into what they wrote.
+      #
+      # `--from-line` contributes nothing: it is a suffix, and a suffix past the
+      # end of the file already says so through the lines it held back.
+      #
+      # A line the file HAS and that is blank is not here and must never be —
+      # `blank` already says "you named a line that exists and holds nothing",
+      # and stating both would be one line reported under two causes. The
+      # comparison is against the file's length alone, which is what keeps that
+      # true rather than merely usually true.
+      #
+      # @return [Array<String>]
+      def absent_entries(options, length)
+        return [] unless options.line_set
+
+        options.line_set.filter_map do |range|
+          first = [range.first, length + 1].max
+          next if first > range.last
+
+          first == range.last ? first.to_s : "#{first}-#{range.last}"
+        end.uniq
       end
 
       # The per-line report on stdout — it is the product — with the diagnostics
@@ -748,10 +803,14 @@ module SpecGuard
       # is empty". A `--from-line` past the end of the file, a `--lines` that
       # names only lines the file does not have, and a genuinely empty file are
       # the same silence otherwise, and only two of them are the user's mistake.
+      # The third clause is what tells the second of those from the first: a
+      # held-back count alone is the file's own length read back, which a reader
+      # can mistake for a selector that did something.
       def empty_detail(source)
         parts = []
         parts << "#{source.blank} blank line#{'s' unless source.blank == 1}" if source.blank.positive?
         parts << skipped_clause(source) if source.skipped.positive?
+        parts << absent_clause(source) if source.absent.any?
 
         parts.empty? ? "" : " (#{parts.join('; ')})"
       end
@@ -766,6 +825,16 @@ module SpecGuard
         return "#{count} line#{'s' unless count == 1} not selected by --lines" if source.selector == :line_set
 
         "#{count} earlier line#{'s' unless count == 1} skipped by --from-line"
+      end
+
+      # The typed numbers the file does not have, named rather than counted.
+      # {#skipped_clause}'s counterpart for the other direction: that one says
+      # how much of the FILE the selector held back, and this one says how much
+      # of the SELECTOR the file could not answer. A count would be the wrong
+      # shape here — the reader's next action is editing the numbers they typed,
+      # so the clause hands those numbers back in the form they wrote them.
+      def absent_clause(source)
+        "--lines named #{source.absent.join(', ')}, which the file does not have"
       end
 
       def blank_clause(source)
@@ -806,6 +875,7 @@ module SpecGuard
         parts << "#{counts[:unparseable]} could not be parsed" if counts[:unparseable]
         parts << blank_clause(source) if source.blank.positive?
         parts << skipped_clause(source) if source.skipped.positive?
+        parts << absent_clause(source) if source.absent.any?
 
         parts.join("; ")
       end

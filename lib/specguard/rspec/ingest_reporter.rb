@@ -105,7 +105,8 @@ module SpecGuard
       STATUS_LISTED = "listed"
       STATUS_UNPARSEABLE = "unparseable"
 
-      # @param source [IngestCLI::Source] the file, its blanks and its skips
+      # @param source [IngestCLI::Source] the file, its blanks, its skips and
+      #   the typed lines it does not have
       # @param results [Array<IngestCLI::LineResult>] one per line delivered,
       #   in the file's order
       # @param counts [Hash{Symbol=>Integer}] status counts, computed once by
@@ -167,6 +168,15 @@ module SpecGuard
       # here. They are stated always, and for the reason {IngestCLI::Source}
       # counts rather than drops them: a summary that quietly narrows what it is
       # summarising is the failure this command is arranged against.
+      #
+      # `absent` is that same rule pointed the other way — at the numbers that
+      # were typed rather than at the lines that were read. A `--lines` entry
+      # naming past the end of the file is held back by nothing and read as
+      # nothing, so `skipped` (which counts lines of <file>) structurally cannot
+      # carry it, and without this key a satisfied selector and a phantom one
+      # render the identical document. It is `null` rather than `[]` where the
+      # selector was fully satisfied, on {#selector}'s terms: a fact that does
+      # not apply is absent, never a fabricated empty.
       def self.summary(source, lines:, counts:, attempted:)
         {
           "lines" => lines,
@@ -177,8 +187,19 @@ module SpecGuard
           "unparseable" => counts.fetch(:unparseable, 0),
           "blank" => source.blank,
           "skipped" => source.skipped,
+          "absent" => absent(source),
           "selector" => selector(source)
         }
+      end
+
+      # The typed line numbers the file does not have, in the shorthand they
+      # were typed in and computed by {IngestCLI} once for both renderers — the
+      # discipline the counts above are held to, applied to the one fact the
+      # text summary and this document could otherwise disagree about.
+      #
+      # @return [Array<String>, nil]
+      def self.absent(source)
+        source.absent.empty? ? nil : source.absent
       end
 
       # Every line that reached the endpoint, which is every line except the
@@ -275,7 +296,8 @@ module SpecGuard
         Array(values).filter_map { |value| value.scrub("") if value.is_a?(String) }
       end
 
-      private_class_method :document, :summary, :attempted, :selector, :delivered, :listed, :folded, :reasons
+      private_class_method :document, :summary, :attempted, :absent, :selector, :delivered, :listed, :folded,
+                           :reasons
     end
   end
 end
