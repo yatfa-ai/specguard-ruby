@@ -250,12 +250,16 @@ end
 # places but with `include` in many more, and `include` is blind to a line's
 # position, to a line appearing twice, and to anything gained around it.
 #
-# The five runs below cover every shape the default renderer can print: all four
+# The runs below cover every shape the default renderer can print: all four
 # per-line statuses, the identity clause, the summary with all four of its
-# outcome clauses AND both of its held-back clauses, a folding observation, the
-# listing's rows and its own summary, and the two stderr warnings. `--from-line`
-# and `--lines` each get a run because they print a *different* skipped clause
-# and criterion 2 names them separately.
+# outcome clauses AND both of its held-back clauses AND its named-absent clause,
+# a folding observation, the listing's rows and its own summary, and the two
+# stderr warnings. `--from-line` and `--lines` each get a run because they print
+# a *different* skipped clause and criterion 2 names them separately. The
+# named-absent clause gets runs of its own on both the delivery and the listing
+# path, and on stderr, because it is the one clause that names numbers rather
+# than counting lines — a wholly unanswered spec and a half-answered range are
+# the same event and are pinned as such.
 #
 # The sink's path is interpolated rather than fixed: it is a temp file by
 # necessity (the command reads a real file), and the path is the one part of
@@ -408,14 +412,46 @@ RSpec.describe "the specguard-ingest default output path, byte for byte" do
   # asked first in `#read_source`, so a blank line the spec does not name is held
   # back rather than counted as blank. That is the existing branch order, pinned
   # here because both clauses are built from the same `Source` the document now
-  # also reads.
-  # @intent: { entity: "specguard-ingest default output", action: "pin the empty-selection warning", behavior: "a selector naming nothing the file holds warns on stderr with the exact not-selected count while stdout stays empty", layer: "unit" }
+  # also reads. The absent clause sits beside it rather than instead of it: the
+  # held-back count is the file's own length read back, and only the second
+  # clause says the typed number was never there to hold.
+  # @intent: { entity: "specguard-ingest default output", action: "pin the empty-selection warning", behavior: "a selector naming nothing the file holds warns on stderr with the exact not-selected count and the exact named-absent clause while stdout stays empty", layer: "unit" }
   it "prints exactly this when a selector named nothing the file has" do
     stdout, stderr, code = run(["--list", "--lines", "99", sink])
 
     expect(stdout).to be_empty
     expect(stderr).to eq("specguard-ingest: warning: #{sink} holds no runs to list " \
-                         "(6 lines not selected by --lines)\n")
+                         "(6 lines not selected by --lines; " \
+                         "--lines named 99, which the file does not have)\n")
+    expect(code).to eq(0)
+  end
+
+  # @intent: { entity: "specguard-ingest default output", action: "pin the named-absent delivery report", behavior: "a delivery whose selector names lines past the end of the file prints exactly the ratified summary bytes naming those lines", layer: "unit" }
+  it "prints exactly this for --lines naming past the end of the file" do
+    stdout, stderr, code = run(["--lines", "1,9-11", sink], responses: [accepted])
+
+    expect(stdout).to eq(<<~OUT)
+      line 1: accepted — HTTP 202, test_run_id tr_7, ci_run_id 17442
+      specguard-ingest: delivered 1 of 1 run from #{sink}; 5 lines not selected by --lines; --lines named 9-11, which the file does not have
+    OUT
+    expect(stderr).to be_empty
+    expect(code).to eq(0)
+  end
+
+  # The half-answered range, which is the same event as the wholly unanswered
+  # one: the portion past the end of the file was typed and delivered nothing.
+  # The clause names that portion rather than the entry it was written in, so
+  # the satisfied half is not reported as missing.
+  # @intent: { entity: "specguard-ingest default output", action: "pin the named-absent listing report", behavior: "a listing whose range runs past the end of the file prints exactly the ratified summary bytes naming the unanswered portion", layer: "unit" }
+  it "prints exactly this for --list with a range running past the end" do
+    stdout, stderr, code = run(["--list", "--lines", "5-9", sink])
+
+    expect(stdout).to eq(<<~OUT)
+      line 5: branch main, commit_sha 0d4a1f2c9b8e7d6a5f4c3b2a1908f7e6d5c4b3a2, ci_run_id zz, 1 example, 1.25s
+      line 6: branch main, commit_sha 0d4a1f2c9b8e7d6a5f4c3b2a1908f7e6d5c4b3a2, ci_run_id yy, 1 example, 1.25s
+      specguard-ingest: listed 2 lines from #{sink}; 4 lines not selected by --lines; --lines named 7-9, which the file does not have; nothing was delivered
+    OUT
+    expect(stderr).to be_empty
     expect(code).to eq(0)
   end
 

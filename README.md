@@ -704,6 +704,28 @@ The held-back lines are **counted and reported**, exactly as `--from-line`'s and
 the blank ones are — a summary that quietly narrowed what it was summarising
 would be worse than no summary.
 
+A number you typed that the file **does not have** is the same rule pointed the
+other way, and it gets its own clause rather than being left to the held-back
+count. On a file that stops short of what the spec named:
+
+```bash
+bundle exec specguard-ingest --list --lines 3,7,12-15,33-40 log/test_results.jsonl
+```
+
+```
+line 3: branch main, commit_sha 41f2c9b8…, ci_run_id 17442, 12 examples, 8.4s
+…
+specguard-ingest: listed 6 lines from log/test_results.jsonl; 26 lines not selected by --lines; --lines named 33-40, which the file does not have; nothing was delivered
+```
+
+A range that is only **half** answered says so on the same terms — the clause
+names the portion past the end of the file, in the shorthand you typed, because
+what you act on is the numbers you wrote. A line the file *does* have and that
+is blank is a blank line and is reported as one; only numbers past the end of
+the file reach this clause, so no line is ever named under two causes. The
+clause is additive: a file that is at once short, blank-bearing and
+selected-away states each cause and drops none of them.
+
 A spec is read strictly, and a bad one is a `2` rather than a fallback to the
 whole file — which is the one outcome a selector exists to prevent. `--lines 0`,
 `--lines 5-2`, `--lines abc`, `--lines 12-`, an empty spec and an empty entry
@@ -811,7 +833,7 @@ bundle exec specguard-ingest --json log/test_results.jsonl
   "file": "log/test_results.jsonl",
   "summary": { "lines": 3, "attempted": 3, "accepted": 2, "refused": 1,
                "undelivered": 0, "unparseable": 0, "blank": 0, "skipped": 0,
-               "selector": null },
+               "absent": null, "selector": null },
   "lines": [
     { "number": 1, "status": "accepted", "code": 202, "reasons": [],
       "test_run_id": "41f2c9b8", "ci_run_id": "17442" },
@@ -839,6 +861,7 @@ bundle exec specguard-ingest --json log/test_results.jsonl
 | `summary.attempted` | how many of those were offered to the endpoint — always `0` under `--list`, and `lines` minus the unparseable ones otherwise |
 | `summary.accepted` / `refused` / `undelivered` / `unparseable` | the same four counts the text summary line states, computed once for both renderers so they cannot disagree |
 | `summary.blank` / `skipped` | the two ways a line of the file is not a row here, counted rather than dropped |
+| `summary.absent` | the `--lines` numbers the file does not have, in the shorthand you typed them — a number or an `N-M` range per entry — or `null` when the selector was fully satisfied; never `[]`, on `selector`'s terms |
 | `summary.selector` | `"--lines"`, `"--from-line"`, or `null` when nothing was held back |
 | `lines[]` | one entry per row, in the file's order |
 | `foldings[]` | folding, **observed**: the lines that went out with one `ci_run_id` and came back with one `test_run_id`. The same statement the text report makes as a sentence |
