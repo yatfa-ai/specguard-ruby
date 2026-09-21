@@ -31,11 +31,16 @@ require "open3"
 #   * that a recorded document renders BYTE FOR BYTE what the Ruby path renders
 #     for the same corpus — the ticket's first success criterion, asserted
 #     rather than assumed;
-#   * that ALL FOUR residual message differences — the four rows of README.md's
-#     table, three read failures and the parse-failure tail — are enumerated and
-#     asserted from BOTH sides, so closing one fails this file rather than
-#     leaving a stale claim. They are labelled `ENUMERATED DIFFERENCE n of 4`
-#     below, numbered by their row in that table;
+#   * that ALL FOUR residual message differences — the parse-failure tail and
+#     three read failures — are enumerated and asserted from BOTH sides, so
+#     closing one fails this file rather than leaving a stale claim. The
+#     enumeration is THIS FILE'S OWN and is defined here, not borrowed: the
+#     four members are labelled `ENUMERATED DIFFERENCE n of 4` below, in the
+#     order (1) the parse-failure tail — the one that is NOT a read failure —
+#     (2) a file that is not well-formed UTF-8, (3) a path matching no file,
+#     and (4) a path that exists and is not a regular file. README.md's
+#     `#### Read-failure wording` section describes the same ground in prose
+#     and numbers nothing, so it cannot be the index these labels count from;
 #   * that every way the backend can fail is exit 2 and never exit 1.
 RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   subject(:backend) { described_class }
@@ -1178,10 +1183,11 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   # ENUMERATED DIFFERENCE 2 of 4 — a file that is not well-formed UTF-8.
   #
   # `Scanner#scan_text` has carried a RATIFIED DIFFERENCE note about this shape
-  # since it was written, and README.md's table has carried the row. Neither
-  # was asserted by anything until this block: the citation was re-pointed at
-  # this file by SPGD-403 and the comparison was never ported, so the Go side's
-  # wording could have moved with nothing going red (SPGD-596).
+  # since it was written (lib/specguard/rspec/scanner.rb, at `scan_text`),
+  # quoting both wordings in place. Neither was asserted by anything until this
+  # block: the citation was re-pointed at this file by SPGD-403 and the
+  # comparison was never ported, so the Go side's wording could have moved with
+  # nothing going red (SPGD-596).
   #
   # PROTOCOL.md §1.1 makes UTF-8 part of what a JSON text IS, so both sides
   # refuse the FILE and neither substitutes U+FFFD and carries on. What is
@@ -1267,15 +1273,17 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     end
 
     # The other side of the ratification. If these ever agree, the difference
-    # has been closed and this block should be retired along with the README row
-    # rather than left asserting a distinction that no longer exists.
+    # has been closed and this block should be retired along with
+    # `Scanner#scan_text`'s RATIFIED DIFFERENCE note rather than left asserting
+    # a distinction that no longer exists.
 
     # Both halves are pinned IN FULL, and both can be: unlike the parse tail,
     # neither wording comes from a default gem whose version tracks the Ruby the
     # suite runs on. The binary's is its own prose, written against PROTOCOL.md;
     # Ruby's is this gem's own literal in `Scanner#scan_text`, not an
     # interpolated `JSON::ParserError#message`. Each moves only when somebody
-    # here moves it, and these are the two strings README.md's table quotes.
+    # here moves it, and these are the two strings `Scanner#scan_text`'s
+    # RATIFIED DIFFERENCE note quotes verbatim.
     # @intent: { entity: "ValidatorBackend", action: "replay the UTF-8 corpus", behavior: "the binary own wording passes through unaltered", layer: "integration" }
     it "passes the binary's own wording through unaltered" do
       (go_stdout, *, _) = both_ways.first
