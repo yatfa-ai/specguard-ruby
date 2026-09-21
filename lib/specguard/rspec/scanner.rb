@@ -45,13 +45,27 @@ module SpecGuard
       #   that matters more — a missing file does not stop either tool checking
       #   the good files named beside it.
       #
-      #   A path that exists and is NOT A REGULAR FILE lands in the same rescue
-      #   and is the same ratified difference one step further out: this rescue
-      #   has an errno and reports it (`Is a directory @ io_fread - <path>`),
-      #   while the binary's glob filters non-regular matches away and answers
-      #   exactly as it does for a name matching nothing. Ruby tells the two
-      #   apart and the backend cannot — asserted under "a path that is not a
-      #   regular file" in that same spec.
+      #   A path that EXISTS and is not a regular file is the same ratified
+      #   difference one step further out. The binary's arguments are glob
+      #   PATTERNS whose matches are filtered to regular files, so such a path
+      #   folds into the answer a name matching nothing gets — the backend has
+      #   nothing else to say about it. This linter does no globbing and hands
+      #   the path to `File.read` as given, so what comes back is whatever
+      #   reading THAT path does, and never what a nonexistent path gets: the
+      #   path is there to be opened, so the failure it does or does not produce
+      #   is a fact about the path rather than about a pattern. Ruby tells the
+      #   two apart and the backend cannot — asserted under "a path that is not
+      #   a regular file" in that same spec, whose subject is a path that
+      #   exists, is not a regular file, and is not a directory.
+      #
+      #   A DIRECTORY is NOT an example of this difference, on either side.
+      #   `CLI#select` refuses one named as an explicit path (SPGD-1303) and
+      #   `--changed` derives its list from git, so a directory is settled
+      #   before this rescue is reached and never reaches the backend either.
+      #   What the shared binary makes of a bare directory argument has moved
+      #   upstream more than once and is deliberately not restated here: the
+      #   difference above is a property of the two sides' path semantics, and
+      #   nothing about a directory is needed to state it.
       def scan_file(path)
         begin
           text = File.read(path, encoding: "UTF-8")
