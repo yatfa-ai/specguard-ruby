@@ -584,6 +584,8 @@ end
 # spec_helper's fixture-leak guard has nothing to catch.
 RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
   include FormatterRunHelpers
+  let(:run) { @run }
+  let(:specs) { run.payload["specs"] }
 
   describe "a suite with a passing, a failing and a pending example, and no annotations" do
     # Once for the whole block: each example here interrogates a different part
@@ -591,8 +593,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
     # nothing but seconds.
     before(:context) { @run = run_rspec(FormatterRunHelpers::MIXED_SUITE) }
 
-    let(:run) { @run }
-    let(:specs) { run.payload["specs"] }
 
     # Criterion 1. The reason to check for progress's marks specifically: a
     # formatter that *replaced* the human one would still leave a summary on
@@ -713,7 +713,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
       @run = run_rspec(FormatterRunHelpers::MIXED_SUITE, wiring: :ruby)
     end
 
-    let(:run) { @run }
 
     # @intent: { entity: "RSpecFormatter ruby wiring", action: "run with no other formatter", behavior: "a suite wired the readme ruby way still prints the progress marks, so the run is not silent", layer: "integration" }
     it "still prints progress's marks, so the run is not silent" do
@@ -895,7 +894,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
       @run = run_rspec(FormatterRunHelpers::MIXED_SUITE, wiring: :ruby_with_failure_list)
     end
 
-    let(:run) { @run }
 
     # @intent: { entity: "RSpecFormatter chosen formatter", action: "respect an explicit failures choice", behavior: "a suite that chose format failures prints the failure list and only that", layer: "integration" }
     it "prints the failure list, and only the failure list" do
@@ -932,7 +930,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
       @run = run_rspec(FormatterRunHelpers::MIXED_SUITE, wiring: :ruby_with_documentation)
     end
 
-    let(:run) { @run }
 
     # @intent: { entity: "RSpecFormatter chosen formatter", action: "respect an explicit documentation choice", behavior: "a suite that chose format documentation prints documentation output", layer: "integration" }
     it "prints documentation output" do
@@ -985,8 +982,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
   describe "a suite exercising every annotation shape" do
     before(:context) { @run = run_rspec(FormatterRunHelpers::ANNOTATED_SUITE) }
 
-    let(:run) { @run }
-    let(:specs) { run.payload["specs"] }
     let(:by_name) { specs.to_h { |spec| [spec["name"], spec] } }
 
     def status_of(name) = by_name.fetch("user #{name}")["status"]
@@ -1098,8 +1093,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
   describe "a table-driven loop, where one `it` produces several examples" do
     before(:context) { @run = run_rspec(FormatterRunHelpers::LOOP_SUITE) }
 
-    let(:run) { @run }
-    let(:specs) { run.payload["specs"] }
 
     # @intent: { entity: "RSpecFormatter table-driven loop", action: "report every iteration", behavior: "a loop producing three examples from one definition runs all three", layer: "integration" }
     it "runs all three examples" do
@@ -1147,8 +1140,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
   describe "a shared example group run from two different spec files" do
     before(:context) { @run = run_rspec(files: FormatterRunHelpers::SHARED_EXAMPLE_FILES) }
 
-    let(:run) { @run }
-    let(:specs) { run.payload["specs"] }
 
     # @intent: { entity: "RSpecFormatter shared example group", action: "report every inclusion", behavior: "a shared group included from two files runs both files worth of examples", layer: "integration" }
     it "runs both files' worth of examples" do
@@ -1210,8 +1201,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
   describe "a suite of one-liner examples with a trailing annotation" do
     before(:context) { @run = run_rspec(FormatterRunHelpers::ONE_LINER_SUITE) }
 
-    let(:run) { @run }
-    let(:specs) { run.payload["specs"] }
     let(:by_name) { specs.to_h { |spec| [spec["name"], spec] } }
 
     # @intent: { entity: "RSpecFormatter one-liner suite", action: "run the one-liners", behavior: "both one-line examples in the suite run", layer: "integration" }
@@ -1324,7 +1313,6 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
         end
       end
 
-      let(:run) { @run }
       let(:request) { @requests.first }
 
       # Criterion 1.
