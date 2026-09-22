@@ -37,8 +37,8 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
   attr_reader :root
 
   describe "the default selection" do
-    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "the default walk finds every spec-named file under the working directory recursively", layer: "unit" }
-    it "finds every *_spec.rb under the working directory, recursively" do
+    # @intent: { entity: "FileSelector", action: "select spec files", behavior: "the default walk finds spec-named files recursively, outside dependency and build directories", layer: "unit" }
+    it "finds every *_spec.rb outside dependency/build directories, recursively" do
       write(root, "spec/models/order_spec.rb")
       write(root, "spec/requests/deeply/nested/checkout_spec.rb")
 
