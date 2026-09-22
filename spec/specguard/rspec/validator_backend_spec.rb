@@ -14,6 +14,15 @@ require "open3"
 # hand-built to be a shape the real binary must never emit, and the "binary" is
 # a four-line shell stub this file writes into a tmpdir.
 #
+# RECORDING CONVENTION — the binary decorates each finding with an `intent`
+# key describing the annotation rather than the verdict document this gem
+# consumes, and the document parser accepts the key's presence or absence
+# alike. A stored recording may therefore carry or strip that key, and both
+# are correct. Judge a re-record FIELD-WISE: every key except `intent` must
+# match a fresh binary re-capture exactly. An `intent`-shaped diff against a
+# stored recording is this convention, never staleness — do not "fix" a
+# stripped recording by pasting raw binary output.
+#
 # That is deliberate, not a shortcut. `lib/specguard/rspec.rb`'s SCHEMA_PATH
 # forbids this gem a cross-repo runtime dependency, and a spec that shelled out
 # to a Go binary would pass on one container and be unrunnable on every other.
@@ -1345,9 +1354,12 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   # is not a directory, and it is readable as empty — so it keeps this row's
   # exact subject (the binary's glob semantics folding a non-regular path into
   # `no-match`, which this gem re-words) while depending on neither retired
-  # behaviour. The live binary answers for it byte-identically to the recording
-  # below, which is why the re-record is a re-grounding and not a weakening.
-  # The first example still fails loudly if the path ever stops being one.
+  # behaviour. The live binary's answer for this path matches the recording
+  # below on every field except the per-finding `intent` key, which this
+  # recording strips per the recording convention in this file's header —
+  # judged field-wise the re-record is a re-grounding and not a weakening,
+  # and pasting the raw binary output here will not byte-match. The first
+  # example still fails loudly if the path ever stops being one.
   describe "a path that is not a regular file" do
     let(:paths) { %w[/dev/null spec/fixtures/order_spec.rb] }
     let(:recorded) { File.read("spec/fixtures/validator/not-a-regular-file.json") }
