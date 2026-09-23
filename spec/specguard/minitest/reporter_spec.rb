@@ -387,6 +387,39 @@ module SpecGuard
           expect(output.string.scan("SpecGuard:").length).to eq(1)
         end
 
+        # The once-per-process budget, pinned with a driver that can lose
+        # it. Every `record` routes its failing lookup through `warn_once`,
+        # so a multi-row run multiplies the calls — and only the
+        # `return if @warned` guard collapses them to one line. The
+        # single-record sibling above drives that guarded path once, so its
+        # `scan == 1` passes identically on correct code and on a reporter
+        # that warns per row (measured 1-vs-1 with the guard stripped);
+        # this driver discriminates (measured 1-vs-3 at three rows). The
+        # transport delivers cleanly, so the annotation route is the run's
+        # only warning source — the same shape the RSpec formatter's own
+        # pin uses, fifty `finish` calls behind one `WARNING_PREFIX` scan.
+        # @intent: { entity: "Minitest Reporter", action: "hold the warning budget", behavior: "a multi-row run whose every annotation lookup fails warns exactly once, keeps every row recorded and unannotated, and never affects the suite verdict", layer: "unit" }
+        it "warns exactly once however many rows hit a failing annotation lookup" do
+          broken = SpecGuard::RSpec::AnnotationLookup.new
+          allow(broken).to receive(:intent_for).and_raise(IOError, "spec file vanished")
+          transport, _, calls = recording_transport
+          output = StringIO.new
+          reporter = Reporter.new(configuration: configuration(base_env),
+                                  transport: transport, output: output,
+                                  annotations: broken)
+          3.times { reporter.record(result(:passed)) }
+          reporter.report
+
+          rows = reporter.instance_variable_get(:@rows)
+          expect(rows.length).to eq(3)
+          expect(rows.map { |row| row["status"] }).to all(eq("unannotated"))
+          expect(rows.map { |row| row["intent"] }).to all(be_nil)
+          expect(reporter.passed?).to be(true)
+          expect(calls.call).to eq(1)
+          expect(output.string.scan("SpecGuard:").length).to eq(1)
+          expect(output.string).to include("IOError")
+        end
+
         # The lookup is asked in the platform's own file vocabulary — the
         # relativized path the row ships — with the definition-site line.
         # @intent: { entity: "Minitest Reporter", action: "delegate coordinates", behavior: "the reporter asks the lookup with the relativized file path and the integer line the row carries", layer: "unit" }
