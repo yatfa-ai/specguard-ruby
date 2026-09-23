@@ -87,7 +87,12 @@ module SpecGuard
     #     nobody;
     #   * an `@intent:` whose payload could not be captured or parsed
     #     ({Finding#problem?} — `KIND_EXTRACTION` / `KIND_PARSE`);
-    #   * a file that could not be read at all (`KIND_READ`);
+    #   * a file that could not be read at all (`KIND_READ`) — read against
+    #     the root bound at construction, never against wherever the cwd has
+    #     since moved, so a readable, correctly annotated spec no longer turns
+    #     unreadable just because the suite changed directory. What still
+    #     lands here is a path that names nothing under that root: genuinely
+    #     absent, or relative to some other root this run never bound;
     #   * a syntactically fine annotation the schema rejects;
     #   * the schema itself failing to load.
     #
@@ -148,11 +153,27 @@ module SpecGuard
       # path cannot drift apart.
       EMPTY_INDEX = Index.new({}.freeze, {}.freeze).freeze
 
+      # The read root, bound here at construction rather than per read. Both
+      # clients build one lookup at suite start ({Formatter}'s and
+      # {Reporter}'s constructors default it in) and then hand it
+      # repo-relative paths, and a suite is free to change the working
+      # directory between those two moments. Resolving per read would open
+      # every relative spelling against wherever the cwd had since moved —
+      # a readable, correctly annotated spec file that no longer resolves
+      # from the new cwd answers {EMPTY_INDEX}, which is byte-for-byte what a
+      # genuinely unannotated example reports, so nothing downstream could
+      # detect the loss. Binding here keeps one run on one root — the same
+      # one-binding-per-run rule the reporter already applies to its own
+      # relativization, applied to the lookup's half of the pipeline. When
+      # the cwd never moves, resolution is the identity on every path the
+      # suite hands over.
+      #
       # @param env [Hash, ENV] where `SPECGUARD_VALIDATE_INTENT` is read from.
       #   Injected for testing, and read LAZILY — see {#backend}.
       def initialize(env: ENV)
         @env = env
         @indexes = {}
+        @root = Dir.pwd
       end
 
       # The intent to attach to one example, or nil when it is unannotated.
@@ -165,7 +186,9 @@ module SpecGuard
       # what keeps "warns once" from becoming "warns once but rescans the file
       # for every one of the remaining examples".
       #
-      # @param file [String, nil] the example's file, as the payload records it
+      # @param file [String, nil] the example's file, as the payload records it.
+      #   A relative spelling is resolved against the root bound at
+      #   construction — see {#initialize} — and never against the live cwd.
       # @param line [Integer, nil] `example.metadata[:line_number]`
       # @return [Hash, nil] the parsed, schema-valid annotation
       def intent_for(file:, line:)
@@ -245,16 +268,43 @@ module SpecGuard
 
       # @return [Index]
       def build_index(file)
+        # One resolution for both legs: the local read below and the validator
+        # subprocess (#verdicts_for -> Runner#check) must answer about the SAME
+        # file, and the child inherits this process's working directory rather
+        # than being told one — so an unresolved relative spelling used to fail
+        # on both legs at once, which is why the degradation was total.
+        # Resolving before either leg runs gives both one path. The memo
+        # stays keyed by the caller's spelling; the resolution is
+        # deterministic per construction, so the two can never disagree.
+        resolved = resolve_path(file)
+
         # The read happens on BOTH paths and first on both. The backend does not
         # need it to find annotations — it reads the file itself — but the
         # comment-form rule below is a property of the LINE an annotation sits
         # on, which no report carries, so the text is required either way. Doing
         # it first also keeps the two paths agreeing about an unreadable file
         # without a subprocess being started to rediscover it.
-        text = read(file)
+        text = read(resolved)
         return EMPTY_INDEX if text.nil?
 
-        index_from(verdicts_for(file, text), text)
+        index_from(verdicts_for(resolved, text), text)
+      end
+
+      # A caller-named path, made absolute against the root {#initialize} bound.
+      #
+      # Absolute spellings pass through untouched — they are what every existing
+      # caller hands over, and expanding them could only normalize a string the
+      # caller meant literally. A leading `~` passes through too:
+      # {File.expand_path} would resolve it against `$HOME` even with a root
+      # given, and a path that could not be read before resolution existed must
+      # keep reading as unreadable, not start reading somewhere new.
+      #
+      # @param file [String] a non-empty path, as the caller named it
+      # @return [String]
+      def resolve_path(file)
+        return file if file.start_with?(File::SEPARATOR, "~")
+
+        File.expand_path(file, @root)
       end
 
       # One shell-out per FILE, which is the cost model this class already
@@ -336,6 +386,10 @@ module SpecGuard
       # turns an unreadable file into a line-0 KIND_READ Finding, which this
       # class filters out, and nil here becomes {EMPTY_INDEX}. Either way, every
       # example in a file that could not be read is unannotated.
+      #
+      # {#build_index} hands the path over already resolved — once for both
+      # this leg and the validator subprocess — so `file` here opens the same
+      # file whichever leg asks, wherever the cwd has since moved.
       #
       # @return [String, nil]
       def read(file)
