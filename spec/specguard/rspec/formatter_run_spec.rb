@@ -693,6 +693,86 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
     end
   end
 
+  # SPGD-1417. The lookup binds its read root when the formatter is built —
+  # suite start, before any spec file loads — and a suite is free to move the
+  # working directory after that. Run for real, in a child, because the thing
+  # under test is the whole chain: rspec-core's own relativization hands the
+  # lookup repo-relative paths, and only a real cwd move can make the row and
+  # the read disagree.
+  #
+  # Two files, deliberately: the lookup builds one index per file, so a single
+  # file straddling the move would have its index built by the first row and
+  # answer the second from the memo — green on any root behaviour at all. The
+  # second file is the one whose FIRST lookup happens inside the moved
+  # directory; the first file is the control that proves the fixtures and the
+  # stub validator annotate at all. The chdir sits in a `before(:all)` /
+  # `after(:all)` pair rather than an `around` hook so the row is captured
+  # inside the moved directory however rspec orders its notifications, and
+  # restored before the child writes its relative sink path.
+  describe "a suite that changes directory mid-run (SPGD-1417)" do
+    def annotated_before
+      <<~RUBY
+        RSpec.describe "before the move" do
+          # @intent: { entity: "Order", action: "checkout", behavior: "returns 402 payment required on expired card", layer: "request" }
+          it "records before the suite moves" do
+            expect(1).to eq(1)
+          end
+        end
+      RUBY
+    end
+
+    def annotated_after
+      <<~RUBY
+        ROOT = Dir.pwd
+
+        RSpec.describe "after the move" do
+          before(:all) { Dir.chdir(File.join(ROOT, "sub")) }
+          after(:all) { Dir.chdir(ROOT) }
+
+          # @intent: { entity: "Order", action: "refund stock", behavior: "a refund restores the stock the order consumed", layer: "unit" }
+          it "still records after the suite moved" do
+            expect(1).to eq(1)
+          end
+        end
+      RUBY
+    end
+
+    before(:context) do
+      @run = run_rspec(annotated_before, files: {
+                         "elsewhere/after_spec.rb" => annotated_after,
+                         "sub/.keep" => ""
+                       })
+    end
+
+    let(:run) { @run }
+    let(:specs) { run.payload["specs"] }
+
+    def row_for(path)
+      specs.find { |spec| spec["file_path"] == path }
+    end
+
+    # @intent: { entity: "RSpecFormatter child run", action: "annotate across a mid-run chdir", behavior: "a readable annotated spec whose first lookup happens after the suite changed directory still reports annotated with its intent", layer: "integration" }
+    it "still annotates the spec first read after the suite moved" do
+      expect(run.exit_status).to eq(0)
+
+      after_row = row_for("elsewhere/after_spec.rb")
+      expect(after_row).not_to be_nil
+      expect(after_row["status"]).to eq("annotated")
+      expect(after_row["intent"]).to include("entity" => "Order", "action" => "refund stock")
+    end
+
+    # The control, asserted as its own example rather than implied by the one
+    # above: with broken fixtures or a broken stub, both rows would read
+    # unannotated and the example above would say nothing about the chdir.
+    # @intent: { entity: "RSpecFormatter child run", action: "annotate across a mid-run chdir", behavior: "the spec read before the move keeps annotating, so the sibling assertion is about the chdir and not about broken fixtures", layer: "integration" }
+    it "keeps annotating the spec read before the move" do
+      before_row = row_for("sample_spec.rb")
+      expect(before_row).not_to be_nil
+      expect(before_row["status"]).to eq("annotated")
+      expect(before_row["intent"]).to include("entity" => "Order", "action" => "checkout")
+    end
+  end
+
   # Criterion 1, under the wiring that can actually fail it.
   #
   # The block above hands its child `--format progress` on the command line, so

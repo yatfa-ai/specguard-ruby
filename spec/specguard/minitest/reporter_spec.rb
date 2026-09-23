@@ -494,6 +494,77 @@ module SpecGuard
           expect(annotations).to have_received(:intent_for)
             .with(file: "spec/foo_test.rb", line: 12)
         end
+
+        # SPGD-1417. The lookup binds its read root when the reporter constructs
+        # it; the rows a mid-suite chdir used to lose are exactly these — the
+        # reporter relativizes the definition site against ITS bound root
+        # (SPGD-1408), the lookup then opened that relative spelling against
+        # the live cwd, and a readable annotated suite read back as
+        # unannotated. Two files, deliberately: the lookup builds one index
+        # per file, so one file straddling the move would have its index
+        # built by the first row and answer the second from the memo — green
+        # on any root behaviour at all. The second file is the one whose
+        # FIRST lookup happens inside the moved directory; the first is the
+        # control that proves the fixture and the stub validator annotate.
+        # The memo isolation is the same discipline the "the relativization
+        # root" block applies to the reporter's own root: cleared before, so
+        # the block's chdir is what binds it; restored after, whether or not
+        # anything was bound to begin with.
+        # @intent: { entity: "Minitest Reporter", action: "annotate across a mid-run chdir", behavior: "a readable annotated suite still resolves after the run changes directory, the lookup reading against the root bound at its construction", layer: "unit" }
+        it "still annotates a readable suite after the run changes directory mid-run" do
+          Dir.mktmpdir do |dir|
+            root = File.realpath(dir)
+            FileUtils.mkdir_p(File.join(root, "sub"))
+            before_file = File.join(root, "before_test.rb")
+            after_file = File.join(root, "after_test.rb")
+            [before_file, after_file].each do |path|
+              File.write(path, <<~RUBY)
+                class OrdersTest < Minitest::Test
+                  # @intent: { entity: "Order", action: "refund stock", behavior: "a refund restores the stock the order consumed", layer: "unit" }
+                  def test_restores_stock
+                    assert_equal 1, 1
+                  end
+                end
+              RUBY
+            end
+            line = File.readlines(before_file)
+                        .index { |l| l.include?("def test_restores_stock") } + 1
+
+            had_repo_root = Reporter.instance_variable_defined?(:@repo_root)
+            previous_repo_root = Reporter.instance_variable_get(:@repo_root) if had_repo_root
+            rows = nil
+            begin
+              Reporter.remove_instance_variable(:@repo_root) if had_repo_root
+              Dir.chdir(root) do
+                reporter = Reporter.new(configuration: configuration(base_env),
+                                        transport: recording_transport.first, output: StringIO.new,
+                                        annotations: stub_validator_annotations)
+                # Recorded before the move: binds the reporter's own
+                # relativization root (SPGD-1408) to `root`, so the second
+                # row relativizes to the same repo-relative spelling — and
+                # doubles as the positive control that the fixture and the
+                # stub validator annotate at all.
+                reporter.record(result(:passed, location: [before_file, line]))
+                Dir.chdir(File.join(root, "sub")) do
+                  reporter.record(result(:passed, location: [after_file, line]))
+                end
+                reporter.report
+                rows = reporter.instance_variable_get(:@rows)
+              end
+            ensure
+              if had_repo_root
+                Reporter.instance_variable_set(:@repo_root, previous_repo_root)
+              elsif Reporter.instance_variable_defined?(:@repo_root)
+                Reporter.remove_instance_variable(:@repo_root)
+              end
+            end
+
+            expect(rows.map { |row| row["file_path"] })
+              .to eq(%w[before_test.rb after_test.rb])
+            expect(rows.map { |row| row["status"] }).to eq(%w[annotated annotated])
+            expect(rows.last["intent"]).to include("entity" => "Order", "action" => "refund stock")
+          end
+        end
       end
 
       describe "the ingestible floor" do
