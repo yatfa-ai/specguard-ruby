@@ -140,6 +140,66 @@ module SpecGuard
         end
       end
 
+      describe "the relativization root" do
+        # `Reporter.repo_root` memoizes into a class-level ivar on the
+        # singleton, so it outlives the example that first reads it — including
+        # the reads the six `result` fixture sites in this file make. This
+        # borrows it for one example and puts the process back exactly as it
+        # was found: cleared before, so the block's own `Dir.pwd` is what
+        # binds; restored after, whether or not anything was bound to begin
+        # with. It lives here and not in `lib/` — the library has no reason to
+        # offer a way to unbind a root that is meant to be bound once.
+        def with_unbound_repo_root
+          had = Reporter.instance_variable_defined?(:@repo_root)
+          previous = Reporter.instance_variable_get(:@repo_root) if had
+          Reporter.remove_instance_variable(:@repo_root) if had
+          yield
+        ensure
+          if had
+            Reporter.instance_variable_set(:@repo_root, previous)
+          elsif Reporter.instance_variable_defined?(:@repo_root)
+            Reporter.remove_instance_variable(:@repo_root)
+          end
+        end
+
+        # @intent: { entity: "Minitest Reporter", action: "relativize rows against one root", behavior: "every row of one run is relativized against the root bound when the run began, so a working-directory change mid-suite does not emit some rows relative and others absolute", layer: "unit" }
+        it "keeps every row of one run in one path register when the suite changes directory mid-run" do
+          Dir.mktmpdir do |dir|
+            # Captured literals, deliberately: every fixture path below is
+            # built from `root`, a string read ONCE before the reporter exists
+            # and never re-read. Deriving them from `Reporter.repo_root`
+            # instead — the shape the six sites in this file use, correctly,
+            # for a different question — would make the fixture and the
+            # relativization root the same moving expression, so they would
+            # move together and this example could not fail however the root
+            # behaved.
+            root = File.realpath(dir)
+            FileUtils.mkdir_p(File.join(root, "sub"))
+
+            rows = with_unbound_repo_root do
+              Dir.chdir(root) do
+                reporter = Reporter.new(configuration: configuration(base_env),
+                                        transport: recording_transport.first, output: StringIO.new)
+                reporter.record(result(:passed, location: ["#{root}/a_test.rb", 1]))
+                Dir.chdir(File.join(root, "sub")) do
+                  reporter.record(result(:passed, location: ["#{root}/b_test.rb", 2]))
+                end
+                reporter.report
+                reporter.instance_variable_get(:@rows)
+              end
+            end
+
+            # Both relative to the one root, so both name the same repository
+            # the platform indexes them under. Unmemoized, the second row's
+            # root has moved to `sub/`, `#relative_path`'s prefix guard stops
+            # matching, and it ships absolute — a well-formed spelling of the
+            # same file that no validation can tell apart from a different one.
+            expect(rows.map { |row| row["file_path"] }).to eq(%w[a_test.rb b_test.rb])
+            expect(rows.map { |row| row["id"] }).to eq(%w[a_test.rb:1 b_test.rb:2])
+          end
+        end
+      end
+
       describe "generated-test identity" do
         # A `define_method("test_x_#{param}")` loop gives every generated
         # test the SAME source_location — the define_method call site — so

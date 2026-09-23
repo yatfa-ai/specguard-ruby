@@ -61,11 +61,15 @@ module SpecGuard
       # and would surface as noise. The RSpec formatter's `capture` makes the
       # equivalent call about a metadata-less example.
       class << self
-        # `Dir.pwd` at load time, not per row: a reporter constructed inside a
-        # test that changes the working directory would otherwise relativize
-        # one suite's rows against two different roots.
+        # `Dir.pwd` bound once, on first use, not per row: a reporter
+        # constructed inside a test that changes the working directory would
+        # otherwise relativize one suite's rows against two different roots.
+        # The memo is what binds it — an unmemoized `Dir.pwd` here re-reads the
+        # cwd on every row and is exactly the two-root split this comment
+        # names, with both spellings individually well-formed so nothing
+        # downstream can detect the drift.
         def repo_root
-          Dir.pwd
+          @repo_root ||= Dir.pwd
         end
       end
 
