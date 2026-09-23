@@ -629,6 +629,99 @@ module SpecGuard
                                   output: StringIO.new)
           expect(reporter.passed?).to be(true)
         end
+
+        # An unwritable sink, made unwritable WITHOUT `chmod` — deliberately,
+        # and the choice is load-bearing rather than stylistic. `chmod` makes a
+        # path unwritable only for SOME uids: root ignores the permission bits
+        # entirely, so under a root CI image a `0o500` fixture accepts the
+        # write and the pin below passes on BOTH arms of the mutation — real
+        # green, fake coverage, and nothing to notice it. A regular file
+        # occupying the parent-directory name is unwritable for EVERY uid,
+        # which is why this fixture is correct without knowing the uid it runs
+        # under. (Both halves measured in this container, uid 1000 and uid 0.)
+        #
+        # It raises out of `FileUtils.mkdir_p` rather than `File.open`, because
+        # `#append` calls mkdir_p first — measured `Errno::EEXIST`
+        # ("File exists @ dir_s_mkdir"), NOT the `Errno::ENOTDIR` the fixture's
+        # shape suggests. The pin below deliberately asserts on neither: the
+        # discriminating fact is the sink PATH, which is stable across both.
+        #
+        # Ported from the RSpec twin's `unwritable_sink!`
+        # (formatter_spec.rb:1472-1476), which makes the same choice.
+        def unwritable_sink_path(dir)
+          blocker = File.join(dir, "blocker")
+          File.write(blocker, "not a directory")
+          File.join(blocker, "test_results.local.jsonl")
+        end
+
+        # `#append`'s own `rescue` is shadowed by `#report`'s outer
+        # `rescue ScriptError, StandardError`, so deleting the inner one does
+        # NOT make the run raise, does NOT redden the reporter, and does NOT
+        # remove the warning — the outer handler SUBSTITUTES a different
+        # sentence ("could not ship test telemetry"). Every natural assertion
+        # in this file — `include("SpecGuard:")`, the one-warning scan,
+        # `passed?` — therefore passes identically on both arms and pins
+        # nothing.
+        #
+        # The discriminator is WHICH sentence, and specifically the one fact an
+        # outer handler cannot supply: an outer rescue is by construction more
+        # generic than the inner one it shadows, so what is lost is always the
+        # specific fact — here the configured sink PATH, the only thing that
+        # tells an operator which file to go and fix. Assert on the bytes that
+        # differ.
+        #
+        # @intent: { entity: "Minitest Reporter", action: "name the unwritable sink", behavior: "an unwritable sink is swallowed and the warning names the configured sink path, so the operator learns which file could not be written rather than a generic delivery failure", layer: "unit" }
+        it "names the unwritable sink path in the warning instead of a generic failure" do
+          Dir.mktmpdir do |dir|
+            sink = unwritable_sink_path(dir)
+            env = base_env.except("SPECGUARD_API_KEY").merge("SPECGUARD_LOCAL_OUTPUT_PATH" => sink)
+            output = StringIO.new
+            reporter = Reporter.new(configuration: configuration(env),
+                                    transport: recording_transport.first, output: output)
+            reporter.record(result(:passed))
+            expect { reporter.report }.not_to raise_error
+
+            # The load-bearing clause: the path, not merely "a warning". This
+            # is what the outer handler's substituted sentence cannot carry.
+            expect(output.string).to include(sink)
+            expect(File.exist?(sink)).to be(false)
+            expect(reporter.passed?).to be(true)
+          end
+        end
+
+        # The sharper half of the same guard, and the arm that is genuinely
+        # silent. `#fall_back` warns BEFORE it appends — a landed decision,
+        # stated in the RSpec twin's own comment, because the outer guard's one
+        # allotted warning is better spent on the more specific delivery
+        # message. The consequence on THIS path is that when a delivery is
+        # refused AND the replay queue is unwritable, `warn_once`'s
+        # one-per-process budget is already spent, `#append`'s rescue fires
+        # into a no-op, and the run is dropped with nothing on stderr naming
+        # the loss.
+        #
+        # This pins today's measured contract rather than reversing it: the
+        # order is out of scope here. Note what is deliberately NOT asserted —
+        # a warning COUNT, which would be a pin on the order rather than on the
+        # loss.
+        #
+        # @intent: { entity: "Minitest Reporter", action: "survive an unwritable replay queue", behavior: "a rejected delivery whose replay queue cannot be written neither raises nor reddens the run, and the queue file is simply absent", layer: "unit" }
+        it "survives a rejected delivery whose replay queue cannot be written" do
+          Dir.mktmpdir do |dir|
+            queue = unwritable_sink_path(dir)
+            env = base_env.merge("SPECGUARD_OUTPUT_PATH" => queue)
+            output = StringIO.new
+            reporter = Reporter.new(configuration: configuration(env),
+                                    transport: recording_transport(outcome: :rejected).first,
+                                    output: output)
+            reporter.record(result(:passed))
+            expect { reporter.report }.not_to raise_error
+
+            # The run is lost: the queue the fall-back exists to fill was never
+            # created, and the suite is none the wiser.
+            expect(File.exist?(queue)).to be(false)
+            expect(reporter.passed?).to be(true)
+          end
+        end
       end
     end
   end
