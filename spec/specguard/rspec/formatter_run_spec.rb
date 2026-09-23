@@ -1374,9 +1374,10 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
       expect(@red.exit_status).to eq(1)
     end
 
-    # @intent: { entity: "RSpecFormatter unwritable sink", action: "warn once off stdout", behavior: "the sink failure warns once on stderr while stdout stays the human formatter own", layer: "integration" }
+    # @intent: { entity: "RSpecFormatter unwritable sink", action: "warn once off stdout", behavior: "the sink failure warns once on stderr, naming the configured sink path, while stdout stays the human formatter own", layer: "integration" }
     it "warns once on stderr, and leaves stdout to the human formatter" do
-      expect(@green.stderr.scan(/SpecGuard: test telemetry failed/).length).to eq(1)
+      expect(@green.stderr.scan(/SpecGuard: could not write telemetry/).length).to eq(1)
+      expect(@green.stderr).to include("blocker/test_results.jsonl")
       expect(@green.stdout).not_to include("SpecGuard:")
     end
 

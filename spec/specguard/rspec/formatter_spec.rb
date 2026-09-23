@@ -1529,11 +1529,11 @@ RSpec.describe SpecGuard::RSpecFormatter do
     end
 
     # @intent: { entity: "RSpecFormatter", action: "never fail the run", behavior: "the unwritable path is named on stderr once with its underlying error", layer: "unit" }
-    it "says so on stderr, once, naming the underlying error" do
+    it "names the configured sink path on stderr, with the underlying error" do
       unwritable_sink!
       formatter.close(nil)
 
-      expect(errors.string).to include(described_class::WARNING_PREFIX)
+      expect(errors.string).to include(SpecGuard::RSpec.configuration.local_output_path)
       expect(errors.string).to match(/Errno::/)
     end
 
@@ -1543,6 +1543,20 @@ RSpec.describe SpecGuard::RSpecFormatter do
       allow(File).to receive(:open).with(local_sink, "a").and_raise(IOError, "closed stream")
 
       expect { formatter.close(nil) }.not_to raise_error
+      expect(errors.string).to include("IOError")
+    end
+
+    # The IOError arm is the one failure mode whose exception carries no path
+    # at all — "closed stream" names no file — so the configured sink path in
+    # the warning is the only thing that can tell the operator where to look.
+    # @intent: { entity: "RSpecFormatter", action: "never fail the run", behavior: "a sink raising IOError still names the configured sink path on stderr", layer: "unit" }
+    it "names the configured sink path when the write raises IOError" do
+      allow(File).to receive(:open).and_call_original
+      allow(File).to receive(:open).with(local_sink, "a").and_raise(IOError, "closed stream")
+
+      formatter.close(nil)
+
+      expect(errors.string).to include(SpecGuard::RSpec.configuration.local_output_path)
       expect(errors.string).to include("IOError")
     end
 
@@ -1694,7 +1708,11 @@ RSpec.describe SpecGuard::RSpecFormatter do
       unwritable_sink!
       formatter.close(nil)
 
-      expect(errors.string.scan(described_class::WARNING_PREFIX).length).to eq(1)
+      # One LINE, not one occurrence of the generic prefix: the broken example
+      # spends the budget on the generic warning and the unwritable sink would
+      # print its own locally-worded line, so a scan of WARNING_PREFIX alone
+      # would stay at 1 even if the budget stopped covering the sink line.
+      expect(errors.string.lines.length).to eq(1)
     end
 
     # @intent: { entity: "RSpecFormatter", action: "never fail the run", behavior: "nothing is ever written to the shared output stream, whatever happens", layer: "unit" }
