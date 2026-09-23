@@ -202,7 +202,7 @@ module SpecGuard
       # to the transport, whose own contract is that nothing escapes it — a
       # non-success `Result` costs one stderr line and a queued run.
       def deliver(data)
-        return append(data, @configuration.local_output_path) if @configuration.api_key.to_s.strip.empty?
+        return append_local(data) if @configuration.api_key.to_s.strip.empty?
 
         if @configuration.commit_sha.to_s.strip.empty?
           return fall_back(data, "no commit sha could be resolved (set SPECGUARD_COMMIT_SHA)")
@@ -321,17 +321,69 @@ module SpecGuard
 
       # One JSON run per line, to whichever file this delivery's outcome
       # warrants (see `#deliver` for which and why).
+      #
+      # Returns the exception the write died of, or `nil` when it landed,
+      # rather than warning itself. Both call sites need the outcome *in* their
+      # own sentence — the keyless branch has no preceding line and says so
+      # directly, the fall-back folds it into the delivery line it is already
+      # spending the run's one warning on — and a warning here would reach
+      # `warn_once` first on the fall-back path and spend that budget on the
+      # generic write message, losing the HTTP status the operator needs
+      # (SPGD-1413). `Interrupt` stays outside the clause, as everywhere else
+      # in this class.
       def append(data, path)
         FileUtils.mkdir_p(File.dirname(path))
         File.open(path, "a") { |f| f.puts(JSON.generate(data)) }
+        nil
       rescue ScriptError, StandardError => e
-        warn_once("could not write telemetry to #{path} (#{e.class}: #{e.message}). The test run is unaffected.")
+        e
       end
 
+      # The keyless branch's write, and its own warning. Nothing preceded it on
+      # this path, so the budget is free and the failure gets the whole line —
+      # naming the configured sink path, which is the one fact `#report`'s
+      # outer handler could not supply if this were left to raise.
+      def append_local(data)
+        path = @configuration.local_output_path
+        error = append(data, path)
+        return if error.nil?
+
+        warn_once("could not write telemetry to #{path} " \
+                  "(#{error.class}: #{error.message}). The test run is unaffected.")
+      end
+
+      # The refused-delivery sink, and the one line the run is allowed to
+      # report it on.
+      #
+      # == The order, which SPGD-1400 fenced and SPGD-1413 kept
+      #
+      # `reason` is still what the one allotted line is spent on — the status
+      # and the platform's own words, the fact that tells an operator what to
+      # DO. That was the argument for warning before the write and it has not
+      # moved: nothing else may take this budget, which is why `#append` no
+      # longer warns for itself.
+      #
+      # What moved is the *sink clause*. It used to promise the replay queue
+      # before the write that fills it had been attempted, and was never
+      # corrected when that write failed: `warn_once` returns on `@warned`, so
+      # `#append`'s rescue fired into a no-op and a lost run printed "The test
+      # run is unaffected." The clause is now composed after the write, from
+      # `#append`'s answer, so it reports the queue rather than promising it.
+      # One line, same order of reasoning, and the promise is only made when it
+      # is true.
       def fall_back(data, reason)
-        warn_once("could not deliver test telemetry (#{reason}). Falling back to the replay queue. " \
-                  "The test run is unaffected.")
-        append(data, @configuration.output_path)
+        path = @configuration.output_path
+        error = append(data, path)
+        warn_once("could not deliver test telemetry (#{reason}). #{sink_clause(path, error)}")
+      end
+
+      # Report, not promise — see `#fall_back` for why that is the whole of
+      # this slice, and why the order above it did not move.
+      def sink_clause(path, error)
+        return "Falling back to the replay queue. The test run is unaffected." if error.nil?
+
+        "The replay queue #{path} could not be written either " \
+          "(#{error.class}: #{error.message}), so this run's telemetry was lost."
       end
 
       # Once per process, like the formatter's `warn_once`: fifty failing

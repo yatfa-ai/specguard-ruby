@@ -714,14 +714,17 @@ module SpecGuard
           File.join(blocker, "test_results.local.jsonl")
         end
 
-        # `#append`'s own `rescue` is shadowed by `#report`'s outer
-        # `rescue ScriptError, StandardError`, so deleting the inner one does
-        # NOT make the run raise, does NOT redden the reporter, and does NOT
-        # remove the warning — the outer handler SUBSTITUTES a different
-        # sentence ("could not ship test telemetry"). Every natural assertion
-        # in this file — `include("SpecGuard:")`, the one-warning scan,
-        # `passed?` — therefore passes identically on both arms and pins
-        # nothing.
+        # The keyless branch's warning lives in `#append_local`, not in
+        # `#append` — SPGD-1413 moved it there so the fall-back path could keep
+        # the run's one allotted line for the delivery status (see
+        # `#fall_back`). What did not move is what this example pins: that
+        # warning is shadowed by `#report`'s outer
+        # `rescue ScriptError, StandardError`, so deleting it does NOT make the
+        # run raise, does NOT redden the reporter, and does NOT remove the
+        # warning — the outer handler SUBSTITUTES a different sentence ("could
+        # not ship test telemetry"). Every natural assertion in this file —
+        # `include("SpecGuard:")`, the one-warning scan, `passed?` — therefore
+        # passes identically on both arms and pins nothing.
         #
         # The discriminator is WHICH sentence, and specifically the one fact an
         # outer handler cannot supply: an outer rescue is by construction more
@@ -729,6 +732,11 @@ module SpecGuard
         # specific fact — here the configured sink PATH, the only thing that
         # tells an operator which file to go and fix. Assert on the bytes that
         # differ.
+        #
+        # Measured both ways this session: deleting `#append`'s rescue (so the
+        # error reaches `#report`) and deleting `#append_local`'s `warn_once`
+        # (so nothing names it) each fail this example and, in the first case,
+        # its SPGD-1413 sibling below — nothing else in the file moves.
         #
         # @intent: { entity: "Minitest Reporter", action: "name the unwritable sink", behavior: "an unwritable sink is swallowed and the warning names the configured sink path, so the operator learns which file could not be written rather than a generic delivery failure", layer: "unit" }
         it "names the unwritable sink path in the warning instead of a generic failure" do
@@ -749,20 +757,27 @@ module SpecGuard
           end
         end
 
-        # The sharper half of the same guard, and the arm that is genuinely
-        # silent. `#fall_back` warns BEFORE it appends — a landed decision,
-        # stated in the RSpec twin's own comment, because the outer guard's one
-        # allotted warning is better spent on the more specific delivery
-        # message. The consequence on THIS path is that when a delivery is
-        # refused AND the replay queue is unwritable, `warn_once`'s
-        # one-per-process budget is already spent, `#append`'s rescue fires
-        # into a no-op, and the run is dropped with nothing on stderr naming
-        # the loss.
+        # The sharper half of the same guard, and the arm that used to be
+        # genuinely silent. `#fall_back` settles the delivery `reason` first — a
+        # landed decision, stated in the RSpec twin's own comment, because the
+        # run's one allotted warning is better spent on the more specific
+        # message, the one naming the status code. SPGD-1400 pinned the
+        # consequence on THIS path: when a delivery was refused AND the replay
+        # queue was unwritable, `warn_once`'s one-per-process budget had already
+        # been spent on a sentence promising the queue, `#append`'s rescue fired
+        # into a no-op, and the run was dropped behind a line reading "The test
+        # run is unaffected."
         #
-        # This pins today's measured contract rather than reversing it: the
-        # order is out of scope here. Note what is deliberately NOT asserted —
-        # a warning COUNT, which would be a pin on the order rather than on the
-        # loss.
+        # SPGD-1413 made that line true without reversing the order: the sink
+        # clause is composed AFTER the write, from `#append`'s own answer, so
+        # the reason still comes first and the queue is reported rather than
+        # promised. The loss now has a sentence — pinned by its own example
+        # below, "names the loss instead of claiming the run was saved".
+        #
+        # This example is the survival half, unchanged and deliberately narrow.
+        # Note what it still does NOT assert — a warning COUNT, which would be a
+        # pin on the order rather than on the loss; the count contract has its
+        # own pins at :447, :479, :586 and :645.
         #
         # @intent: { entity: "Minitest Reporter", action: "survive an unwritable replay queue", behavior: "a rejected delivery whose replay queue cannot be written neither raises nor reddens the run, and the queue file is simply absent", layer: "unit" }
         it "survives a rejected delivery whose replay queue cannot be written" do
@@ -777,8 +792,52 @@ module SpecGuard
             expect { reporter.report }.not_to raise_error
 
             # The run is lost: the queue the fall-back exists to fill was never
-            # created, and the suite is none the wiser.
+            # created. What the suite is no longer none the wiser about is the
+            # sibling example below.
             expect(File.exist?(queue)).to be(false)
+            expect(reporter.passed?).to be(true)
+          end
+        end
+
+        # SPGD-1413, and the half SPGD-1400 fenced off as its own slice: the
+        # arm above survives the double failure, this one is what it SAYS.
+        #
+        # The discriminating assertion is the negative one. Every natural
+        # positive clause here — `include("SpecGuard:")`, `include("HTTP 400")`,
+        # the one-line scan — passes identically on the old code, because the
+        # old line carried the prefix and the status too; what it also carried
+        # was a promise of a replay queue that was never written. So the pin is
+        # on the bytes that differ: the "unaffected" claim must be gone and the
+        # unwritten queue's path must be named. Reverting `#sink_clause`'s
+        # report to the old unconditional promise fails exactly this example.
+        #
+        # The status clause is asserted alongside it, because the whole reason
+        # the order was not reversed is that the status is the more actionable
+        # fact — a slice that made the loss speak by dropping HTTP 400 would
+        # have traded one silence for another.
+        #
+        # @intent: { entity: "Minitest Reporter", action: "name a lost run", behavior: "a rejected delivery whose replay queue cannot be written prints one line that names the refusal status and the unwritten queue rather than claiming the test run is unaffected", layer: "unit" }
+        it "names the loss instead of claiming the run was saved" do
+          Dir.mktmpdir do |dir|
+            queue = unwritable_sink_path(dir)
+            env = base_env.merge("SPECGUARD_OUTPUT_PATH" => queue)
+            output = StringIO.new
+            reporter = Reporter.new(configuration: configuration(env),
+                                    transport: recording_transport(outcome: :rejected).first,
+                                    output: output)
+            reporter.record(result(:passed))
+            reporter.report
+
+            # The load-bearing clause: the run was NOT saved, so the line must
+            # not say it was.
+            expect(output.string).not_to include("unaffected")
+            expect(output.string).to include("lost")
+            # And the two facts an operator needs: which refusal, which file.
+            expect(output.string).to include("HTTP 400")
+            expect(output.string).to include(queue)
+            # Still one line, still green — the budget and the never-fail
+            # contract are unchanged by making that line true.
+            expect(output.string.scan("SpecGuard:").length).to eq(1)
             expect(reporter.passed?).to be(true)
           end
         end
