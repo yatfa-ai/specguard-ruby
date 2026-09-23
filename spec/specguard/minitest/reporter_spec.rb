@@ -54,15 +54,25 @@ module SpecGuard
         result
       end
 
+      # The third element is the *reachability* probe, and it answers a question
+      # the captured payload cannot: `captured` is `nil` both when `deliver` was
+      # never called and when it was called with nothing, so a pre-flight guard
+      # asserted on `captured` alone would also pass for a guard that fired
+      # after the request. `calls` counts invocations, so "never reached the
+      # transport" is measured rather than inferred. Appended, not substituted:
+      # every existing `recording_transport.first` and two-value destructure
+      # reads exactly what it read before.
       def recording_transport(outcome: :success)
         captured = nil
+        calls = 0
         transport = Object.new
         transport.define_singleton_method(:deliver) do |data|
+          calls += 1
           captured = data
           SpecGuard::RSpec::Transport::Result.new(outcome: outcome,
             code: outcome == :success ? 202 : 400)
         end
-        [transport, -> { captured }]
+        [transport, -> { captured }, -> { calls }]
       end
 
       describe "row mapping" do
@@ -498,6 +508,84 @@ module SpecGuard
 
             expect(File.exist?(sink)).to be(true)
             expect(output.string).to be_empty
+          end
+        end
+
+        # The ladder's middle arm, and the reason it is worth having at all.
+        # `Ingest::Payload#validate_commit_sha` refuses a blank commit and the
+        # controller renders 400, so the run would be discarded whole — every
+        # example, not merely the empty field. Spending the run's wall clock to
+        # be told that is pure loss, so the check is a *pre-flight*: it must
+        # happen before the request, not after it.
+        #
+        # The blank state is reached by setting the attribute rather than the
+        # env var, because the two are not equivalent here: `Configuration`
+        # folds a whitespace-only `SPECGUARD_COMMIT_SHA` to nil and then falls
+        # through to the git probe, which in a checkout answers a real sha — so
+        # the env route would silently deliver a *valid* commit and test
+        # nothing. The attribute is the state a git-less container actually
+        # produces.
+        #
+        # @intent: { entity: "Minitest Reporter", action: "gate on the commit before the request", behavior: "a run whose commit could not be resolved never reaches the transport at all and lands on the replay queue instead of the local sink", layer: "unit" }
+        it "never reaches the transport when no commit could be resolved, and queues the run for replay" do
+          Dir.mktmpdir do |dir|
+            queue = File.join(dir, "test_results.jsonl")
+            local_sink = File.join(dir, "test_results.local.jsonl")
+            env = base_env.merge("SPECGUARD_OUTPUT_PATH" => queue,
+                                 "SPECGUARD_LOCAL_OUTPUT_PATH" => local_sink)
+            config = configuration(env)
+            config.commit_sha = "   "
+            transport, _captured, calls = recording_transport
+            output = StringIO.new
+            reporter = Reporter.new(configuration: config, transport: transport, output: output)
+            reporter.record(result(:passed))
+            expect { reporter.report }.not_to raise_error
+
+            # The pre-flight claim itself: the request was never made, so the
+            # wall clock the guard exists to save was actually saved.
+            expect(calls.call).to eq(0)
+            # The replay queue, not the local sink — a blank commit is a failed
+            # delivery a re-run can recover, unlike the keyless branch at :489.
+            expect(File.readlines(queue).length).to eq(1)
+            expect(File.exist?(local_sink)).to be(false)
+            expect(output.string).to include("SPECGUARD_COMMIT_SHA")
+            expect(output.string.scan("SpecGuard:").length).to eq(1)
+            expect(reporter.passed?).to be(true)
+          end
+        end
+
+        # The other half, and the one the suite could not feel before: without
+        # the guard the operator is not merely left unwarned, they are handed a
+        # *different* sentence. The run reaches the replay queue either way, so
+        # only the warning's content separates "set SPECGUARD_COMMIT_SHA" from
+        # a transport error that sends the reader to debug a network which is
+        # not the problem.
+        #
+        # The transport is stubbed `:rejected` deliberately, so that the arm
+        # below this one would produce its own warning if the request were
+        # allowed through — which is what makes the substitution reproducible
+        # here rather than a mere absence. The negative matcher is then the
+        # load-bearing half: the positive clause alone would pass against any
+        # warning that merely mentions a fallback, and the `HTTP 400 — the
+        # endpoint rejected the payload` a live refusal produces is exactly the
+        # shape it must not be.
+        #
+        # @intent: { entity: "Minitest Reporter", action: "name the real cause", behavior: "the unresolvable-commit warning names the missing setting and carries no transport-error shape, so the operator is not sent to debug a rejection that never happened", layer: "unit" }
+        it "names the missing commit as the cause, never a transport error" do
+          Dir.mktmpdir do |dir|
+            env = base_env.merge("SPECGUARD_OUTPUT_PATH" => File.join(dir, "test_results.jsonl"))
+            config = configuration(env)
+            config.commit_sha = "   "
+            output = StringIO.new
+            reporter = Reporter.new(configuration: config,
+                                    transport: recording_transport(outcome: :rejected).first,
+                                    output: output)
+            reporter.record(result(:passed))
+            reporter.report
+
+            expect(output.string).to include("no commit sha could be resolved")
+            expect(output.string).not_to match(/Errno::|400|rejected/)
+            expect(reporter.passed?).to be(true)
           end
         end
 
