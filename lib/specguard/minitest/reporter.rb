@@ -61,13 +61,18 @@ module SpecGuard
       # and would surface as noise. The RSpec formatter's `capture` makes the
       # equivalent call about a metadata-less example.
       class << self
-        # `Dir.pwd` bound once, on first use, not per row: a reporter
-        # constructed inside a test that changes the working directory would
-        # otherwise relativize one suite's rows against two different roots.
-        # The memo is what binds it — an unmemoized `Dir.pwd` here re-reads the
-        # cwd on every row and is exactly the two-root split this comment
-        # names, with both spellings individually well-formed so nothing
-        # downstream can detect the drift.
+        # `Dir.pwd` bound once — by the first `Reporter.new` (whose
+        # `#initialize` reads it, SPGD-1421) or the first direct read — never
+        # per row: a reporter constructed inside a test that changes the
+        # working directory would otherwise relativize one suite's rows
+        # against two different roots. The memo is what binds it — an
+        # unmemoized `Dir.pwd` here re-reads the cwd on every row and is
+        # exactly the two-root split this comment names, with both spellings
+        # individually well-formed so nothing downstream can detect the
+        # drift. The memo is also the ONE value the annotation lookup reads
+        # against: `#initialize` hands it over, so the relativization root
+        # and the lookup's read root cannot drift apart the way they did when
+        # each bound `Dir.pwd` at its own moment.
         def repo_root
           @repo_root ||= Dir.pwd
         end
@@ -75,14 +80,32 @@ module SpecGuard
 
       def initialize(configuration: SpecGuard::RSpec.configuration,
                      transport: nil, output: $stderr,
-                     annotations: SpecGuard::RSpec::AnnotationLookup.new,
+                     annotations: nil,
                      clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
         @configuration = configuration
         # Injected for the specs; the real thing is built the same way the
         # RSpec formatter builds it, from the same configuration object.
         @transport = transport
         @output = output
-        @annotations = annotations
+        # ONE binding, ONE moment (SPGD-1421). The relativization root and the
+        # annotation lookup's read root used to be bound separately: the memo
+        # below lazily, on the FIRST row; the lookup's `Dir.pwd` at
+        # construction. A run whose cwd moved to an ANCESTOR of the
+        # construction directory in between relativized its rows against the
+        # moved-to directory and resolved them against the construction one —
+        # `<root>/work/sample_test.rb` under construction root `<root>/work`
+        # reads as `work/sample_test.rb`, which the lookup expanded into the
+        # doubled `<root>/work/work/...` no file answers — so every readable,
+        # correctly annotated spec in the run shipped `unannotated`, with
+        # nothing downstream able to tell. Both halves now read one value,
+        # bound at construction — the earlier of the two moments, and the one
+        # SPGD-1417 already gave the lookup. Reading the memo here is
+        # load-bearing even when a lookup is injected (the specs do): it pins
+        # the relativization root at construction, so no row can ever bind it
+        # somewhere the lookup is not. The default lookup is handed that same
+        # value; `#relative_path` reads the same memo.
+        root = self.class.repo_root
+        @annotations = annotations || SpecGuard::RSpec::AnnotationLookup.new(root: root)
         @clock = clock
         @rows = []
         @started_at = nil

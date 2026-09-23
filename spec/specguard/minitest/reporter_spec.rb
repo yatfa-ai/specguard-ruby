@@ -565,6 +565,99 @@ module SpecGuard
             expect(rows.last["intent"]).to include("entity" => "Order", "action" => "refund stock")
           end
         end
+
+        # SPGD-1421. The relativization root and the lookup's read root were
+        # bound at two different MOMENTS — the reporter's memo lazily, on the
+        # first row; the lookup's `Dir.pwd` at construction — and nothing made
+        # them agree. The hurting direction is the SHALLOWER move: a run
+        # constructed in `<root>/work` whose FIRST row lands after the cwd
+        # moved to the ancestor `<root>` relativizes against `<root>` —
+        # `<root>/work/sample_test.rb` reads as `work/sample_test.rb` — and
+        # resolves that spelling against the construction directory, doubling
+        # the segment into `<root>/work/work/sample_test.rb`, which no file
+        # answers. Every readable, correctly annotated spec in the run ships
+        # `unannotated` / `intent: nil`, byte-for-byte what a genuinely
+        # unannotated row reports, so nothing downstream can detect the loss.
+        # The ordering is the discriminator, not the chdir: a row recorded
+        # before the move binds the memo to the construction directory and
+        # the two roots agree by luck — exactly what the SPGD-1417 pin above
+        # leans on with its pre-move control row. Both arms here construct in
+        # `work`; the defect arm records its first row only after the move to
+        # the shallower `root`. The control arm runs with no move at all, so
+        # a rig that degraded to "neither arm annotates" fails rather than
+        # passing on equality. Memo isolation per arm, the same discipline
+        # the pin above applies: cleared before, so each arm's own
+        # construction is what binds the root — never a value an earlier arm
+        # left behind, which would agree with both arms by luck and make
+        # this pin green on the unfixed code; restored after.
+        # @intent: { entity: "Minitest Reporter", action: "annotate after a shallower move", behavior: "a readable annotated suite still annotates when its first row is recorded after the run moves to a shallower directory, both roots reading the one value bound at construction", layer: "unit" }
+        it "annotates a suite whose first row is recorded after the run moves to a shallower directory" do
+          Dir.mktmpdir do |dir|
+            root = File.realpath(dir)
+            work = File.join(root, "work")
+            FileUtils.mkdir_p(work)
+            file = File.join(work, "sample_test.rb")
+            File.write(file, <<~RUBY)
+              class OrdersTest < Minitest::Test
+                # @intent: { entity: "Order", action: "refund stock", behavior: "a refund restores the stock the order consumed", layer: "unit" }
+                def test_restores_stock
+                  assert_equal 1, 1
+                end
+              end
+            RUBY
+            line = File.readlines(file)
+                        .index { |l| l.include?("def test_restores_stock") } + 1
+
+            # One arm, one fresh root: the memo is cleared so the arm's own
+            # construction is what binds it, and restored afterwards whether
+            # or not anything was bound to begin with.
+            run_suite = lambda do |&block|
+              had_repo_root = Reporter.instance_variable_defined?(:@repo_root)
+              previous_repo_root = Reporter.instance_variable_get(:@repo_root) if had_repo_root
+              rows = nil
+              begin
+                Reporter.remove_instance_variable(:@repo_root) if had_repo_root
+                Dir.chdir(work) do
+                  reporter = Reporter.new(configuration: configuration(base_env),
+                                          transport: recording_transport.first, output: StringIO.new,
+                                          annotations: stub_validator_annotations)
+                  block.call(reporter)
+                  reporter.report
+                  rows = reporter.instance_variable_get(:@rows)
+                end
+              ensure
+                if had_repo_root
+                  Reporter.instance_variable_set(:@repo_root, previous_repo_root)
+                elsif Reporter.instance_variable_defined?(:@repo_root)
+                  Reporter.remove_instance_variable(:@repo_root)
+                end
+              end
+              rows
+            end
+
+            # The control: no move at all — construction, the single row and
+            # delivery all happen in `work`.
+            control_rows = run_suite.call do |reporter|
+              reporter.record(result(:passed, location: [file, line]))
+            end
+
+            # The defect arm: construction in `work`, FIRST row recorded only
+            # after the move to the shallower `root`.
+            moved_rows = run_suite.call do |reporter|
+              Dir.chdir(root) do
+                reporter.record(result(:passed, location: [file, line]))
+              end
+            end
+
+            expect(control_rows.map { |row| row["status"] }).to eq(%w[annotated])
+            expect(control_rows.first["intent"])
+              .to include("entity" => "Order", "action" => "refund stock")
+            expect(moved_rows.map { |row| row["file_path"] }).to eq(%w[sample_test.rb])
+            expect(moved_rows.map { |row| row["status"] }).to eq(%w[annotated])
+            expect(moved_rows.first["intent"])
+              .to include("entity" => "Order", "action" => "refund stock")
+          end
+        end
       end
 
       describe "the ingestible floor" do
