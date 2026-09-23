@@ -37,12 +37,13 @@ require "open3"
 #     must not be re-expanded as a pattern by a tool whose arguments are globs);
 #   * the JSON -> Linter::Result mapping, including the `problem`/`reasons`
 #     split the document flattens away and `kind` is the only way back to;
-#   * that a recorded document renders BYTE FOR BYTE what the Ruby path renders
-#     for the same corpus — the ticket's first success criterion, asserted
+#   * that a recorded document renders BYTE FOR BYTE the report its recorded
+#     corpus describes — the ticket's first success criterion, asserted
 #     rather than assumed;
 #   * that ALL FOUR residual message differences — the parse-failure tail and
-#     three read failures — are enumerated and asserted from BOTH sides, so
-#     closing one fails this file rather than leaving a stale claim. The
+#     three read failures — are enumerated here and each asserted against the
+#     recorded binary report, so closing one fails this file rather than
+#     leaving a stale claim. No second implementation is claimed. The
 #     enumeration is THIS FILE'S OWN and is defined here, not borrowed: the
 #     four members are labelled `ENUMERATED DIFFERENCE n of 4` below, in the
 #     order (1) the parse-failure tail — the one that is NOT a read failure —
@@ -668,8 +669,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
                                               errors: ["no file(s) match #{escaped}"] }])).first
     end
 
-    # @intent: { entity: "ValidatorBackend::Runner", action: "handle a no-match path", behavior: "a path that matched nothing is classified as a read failure exactly as the Ruby path does", layer: "integration" }
-    it "classifies it as a read failure, exactly as the Ruby path does" do
+    # @intent: { entity: "ValidatorBackend::Runner", action: "handle a no-match path", behavior: "a path that matched nothing is classified as a read failure", layer: "integration" }
+    it "classifies it as a read failure" do
       expect(no_match_result("spec/nope_spec.rb").kind).to eq(SpecGuard::RSpec::Finding::KIND_READ)
     end
 
@@ -698,8 +699,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # rb_sysopen - <path>". Same prefix, same classification, same exit code;
     # only the tail differs, and it differs because the backend cannot know the
     # errno.
-    # @intent: { entity: "ValidatorBackend::Runner", action: "handle a no-match path", behavior: "the wording shares the Ruby path could-not-read prefix", layer: "integration" }
-    it "uses the gem's own wording, sharing the Ruby path's `could not read file: ` prefix" do
+    # @intent: { entity: "ValidatorBackend::Runner", action: "handle a no-match path", behavior: "the wording carries the gem own could-not-read prefix", layer: "integration" }
+    it "uses the gem's own wording, carrying the `could not read file: ` prefix" do
       expect(no_match_result("spec/nope_spec.rb").problem)
         .to eq("could not read file: no file at this path")
     end
@@ -946,7 +947,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   # The two fixtures are themselves pinned byte-for-byte against
   # open-test-intent's examples/sources/, so a
   # corpus that drifted out from under this recording fails there.
-  describe "a recorded corpus renders exactly what the Ruby path renders" do
+  describe "a recorded corpus renders exactly the recorded report" do
     # Relative, and deliberately: both tools echo paths back exactly as given,
     # so the recorded document's `file` values and the Ruby run's have to be
     # spelled the same way. RSpec runs from the gem root.
@@ -963,7 +964,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # SPGD-867: the Ruby half of every comparison in this file is gone (the
     # cutover removed the arm), so what this block pins now is the backend's
     # OWN rendering of the recorded corpus — the bytes CI actually sees.
-    # @intent: { entity: "ValidatorBackend", action: "replay the recorded corpus", behavior: "the recorded corpus renders exactly what the Ruby path renders", layer: "integration" }
+    # @intent: { entity: "ValidatorBackend", action: "replay the recorded corpus", behavior: "the recorded corpus renders exactly the report it describes", layer: "integration" }
     it "renders the recorded corpus" do
       go_stdout, = run_cli({ described_class::ENV_VAR => stub_validator(stdout: recorded, exit_code: 1) })
 
@@ -1052,7 +1053,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # the selection sentence: stderr beyond the provenance line is exactly
       # that one line, byte-identical across the backends like the document
       # itself, so "which implementation ran" remains the only difference.
-      # @intent: { entity: "ValidatorBackend", action: "replay the recorded json corpus", behavior: "only the provenance line differs between the two backends, and stderr beyond it carries the same selection sentence on both", layer: "integration" }
+      # @intent: { entity: "ValidatorBackend", action: "replay the recorded json corpus", behavior: "only the provenance line differs between the two runs, and stderr beyond it carries the same selection sentence", layer: "integration" }
       it "leaves the provenance line on stderr, as the only thing that differs" do
         _, ruby_stderr, = run_json_cli({})
         _, go_stderr, = run_json_cli(go_env)
@@ -1458,8 +1459,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
     # What makes this a SEPARATE row from difference 3 rather than a restatement
     # of it: the Ruby path tells the two apart, and the backend does not.
-    # @intent: { entity: "ValidatorBackend", action: "replay the non-regular-path corpus", behavior: "the backend wording difference is the ratified one, distinct from the Ruby arm", layer: "integration" }
-    it "is the same backend wording difference 3 uses, and a different Ruby one" do
+    # @intent: { entity: "ValidatorBackend", action: "replay the non-regular-path corpus", behavior: "the backend wording is the ratified one difference three also uses", layer: "integration" }
+    it "is the same backend wording difference 3 uses" do
       (ruby_stdout, *), (go_stdout, *) = both_ways
       tail = ->(stdout) { fail_lines(stdout).first.split(read_prefix, 2).last }
 
@@ -1551,7 +1552,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # spec/fixtures/validator/acceptance-set-kind.json is RECORDED from
     # `validate-intent --source --json spec/fixtures/acceptance_set_kind_spec.rb`
     # run from the gem root.
-    describe "payloads outside PROTOCOL.md §1.1 — both backends now agree" do
+    describe "payloads outside PROTOCOL.md §1.1 — the binary classifies them as parse failures" do
       let(:paths) { %w[spec/fixtures/acceptance_set_kind_spec.rb] }
       let(:recorded) { File.read("spec/fixtures/validator/acceptance-set-kind.json") }
 
@@ -1577,8 +1578,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         expect(fail_lines(go_stdout).length).to eq(7)
       end
 
-      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "both backends report the same annotations at the same lines", layer: "integration" }
-      it "reports the same annotations, at the same lines" do
+      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "the recorded annotations are reported at their recorded lines", layer: "integration" }
+      it "reports the recorded annotations, at their recorded lines" do
         (ruby_stdout, *), (go_stdout, *) = both_ways
         lines = ->(stdout) { fail_lines(stdout).map { |line| line[/:(\d+)/, 1].to_i } }
 
@@ -1586,8 +1587,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         expect(lines.call(go_stdout)).to eq([31, 32, 33, 34, 35, 36, 37])
       end
 
-      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "both count them identically as annotations rather than unread files", layer: "integration" }
-      it "counts them identically, and as annotations rather than unread files" do
+      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "they count as annotations rather than unread files", layer: "integration" }
+      it "counts them as annotations rather than unread files" do
         (ruby_stdout, *), (go_stdout, *) = both_ways
         summary = ->(stdout) { stdout.lines.map(&:chomp).grep(/checked \d+ @intent/).first }
 
@@ -1595,8 +1596,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         expect(summary.call(go_stdout)).to eq("specguard-lint: checked 8 @intent annotations, 7 malformed")
       end
 
-      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "both exit one on the corpus", layer: "integration" }
-      it "exits 1 on both" do
+      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "the run exits one on the corpus", layer: "integration" }
+      it "exits 1 on the corpus" do
         (*, ruby_code), (*, go_code) = both_ways
 
         expect(go_code).to eq(ruby_code)
@@ -1614,8 +1615,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # failure and render the one-line `problem` shape. Before §1.1 the backend
       # parsed six of the seven and reported KIND_SCHEMA with a `-> ` line per
       # violation, so this is the assertion that the classification moved.
-      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "every out-of-protocol payload classifies as a parse failure on both backends", layer: "integration" }
-      it "classifies every one of them as a parse failure on both backends" do
+      # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "every out-of-protocol payload classifies as a parse failure", layer: "integration" }
+      it "classifies every one of them as a parse failure" do
         (ruby_stdout, *), (go_stdout, *) = both_ways
         parse_prefix = " — could not parse annotation: "
 
