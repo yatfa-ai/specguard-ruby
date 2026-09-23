@@ -667,8 +667,12 @@ module SpecGuard
     # a silent one.
     #
     # Called from inside {#never_fail_the_run}, so nothing below has to guard
-    # itself against raising — including the fallback `append`, whose own
-    # failure modes (unwritable `log/`, full disk) are already covered there.
+    # itself against raising — the keyless {#append_local}'s failure modes
+    # (unwritable `log/`, full disk) are covered there. The fallback {#append}
+    # is the one exception, and deliberately so: it catches those same modes
+    # itself and hands the outcome back, because the one line {#fall_back} is
+    # spending has to report whether the queue took the run rather than promise
+    # it (SPGD-1413). Nothing raises out of either way.
     #
     # == Why a failure writes the file rather than shrugging
     #
@@ -954,12 +958,27 @@ module SpecGuard
       count == 1 ? noun : "#{noun}s"
     end
 
+    # The delivery failed; this is the second sink and the one line the run is
+    # allowed to say so on.
+    #
+    # == The order, which SPGD-1400 fenced and SPGD-1413 kept
+    #
+    # `reason` is still the first thing settled and still the fact the one
+    # allotted line is spent on: a 401 and a 400 call for entirely different
+    # actions, and no amount of detail about a file substitutes for the status.
+    # That was the argument for warning before the write, and it is unchanged.
+    #
+    # What moved is only the *sink clause*. It used to be a promise — "falling
+    # back to <path>; the test run is unaffected" — emitted before the write it
+    # described, and never corrected when that write failed: `emit_warning`
+    # returns on `@warned`, so the second failure had no budget left to report
+    # itself and a lost run printed a line saying it was safe. The clause is now
+    # composed *after* the write, from {#append}'s own answer, so it reports the
+    # queue rather than promising it. One line, same order of reasoning, and the
+    # promise is only made when it is true.
     def fall_back(data, reason)
-      # Warned before the write, not after: if the fallback write *also* fails,
-      # the outer guard's one allotted warning has already been spent on the
-      # more specific message, which is the one naming the status code.
-      warn_delivery_failure(reason)
-      append(data)
+      path = SpecGuard::RSpec.configuration.output_path
+      warn_delivery_failure(reason, path: path, error: append(data, path))
     end
 
     def transport_for(configuration)
@@ -1033,12 +1052,26 @@ module SpecGuard
       (::RSpec::Core::Metadata.relative_path(string) || string).sub(%r{\A\./}, "")
     end
 
-    # Appends one line. Opened in append mode and written with a single call so
-    # that two suites sharing an output path (parallel CI shards, say) interleave
-    # whole runs rather than halves of one.
-    def append(data)
-      path = SpecGuard::RSpec.configuration.output_path
+    # Appends one line to the replay queue. Opened in append mode and written
+    # with a single call so that two suites sharing an output path (parallel CI
+    # shards, say) interleave whole runs rather than halves of one.
+    #
+    # `path` is passed in rather than read here, so the line {#fall_back}
+    # composes and the file it describes are provably the same string — a
+    # second read of a process-wide singleton could answer differently and name
+    # a path nothing was written to.
+    #
+    # Returns the exception the write died of, or `nil` when it landed — the
+    # fall-back's one line is composed from that answer (see {#fall_back}), and
+    # a raise here could not be, because `close`'s {#never_fail_the_run} would
+    # only reach a warning budget the delivery message has already spent.
+    # `Interrupt` is deliberately outside the clause, as everywhere else in this
+    # file: Ctrl-C must stay Ctrl-C.
+    def append(data, path)
       append_to(data, path)
+      nil
+    rescue ScriptError, StandardError => e
+      e
     end
 
     # The keyless branch's sink: `local_output_path`, a local development
@@ -1079,11 +1112,30 @@ module SpecGuard
     # status when there was one — a 400 and a 401 call for entirely different
     # actions, and a warning that only said "delivery failed" would leave the
     # reader unable to tell which.
-    def warn_delivery_failure(reason)
-      path = SpecGuard::RSpec.configuration.output_path
+    #
+    # `error` is {#append}'s answer, and it decides the line's second clause
+    # only. `nil` means the queue took the run, and the sentence is exactly the
+    # one this formatter has always printed. Anything else means both sinks are
+    # gone: the run really is lost, and the line says so rather than promising a
+    # file that is not there (SPGD-1413). The status clause is identical either
+    # way, because which of the two happened does not change what refused the
+    # delivery.
+    #
+    # Both are required rather than defaulted. There is one call site, and a
+    # default would be a branch no input could reach — the same objection
+    # {#annotated_percentage} states about an unreachable zero-guard.
+    def warn_delivery_failure(reason, path:, error:)
+      emit_warning("#{DELIVERY_WARNING_PREFIX} (#{reason}). #{sink_clause(path, error)}")
+    end
 
-      emit_warning("#{DELIVERY_WARNING_PREFIX} (#{reason}). " \
-                   "Falling back to #{path}; the test run is unaffected.")
+    # Report, not promise. Composed after the write so it can tell the operator
+    # which of the two things actually happened — see {#fall_back} for why that
+    # is the whole of this slice, and why the order above it did not move.
+    def sink_clause(path, error)
+      return "Falling back to #{path}; the test run is unaffected." if error.nil?
+
+      "The replay queue #{path} could not be written either " \
+        "(#{error.class}: #{error.message}), so this run's telemetry was lost."
     end
 
     def emit_warning(line)

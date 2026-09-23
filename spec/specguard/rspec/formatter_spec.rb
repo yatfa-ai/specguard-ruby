@@ -1093,6 +1093,45 @@ RSpec.describe SpecGuard::RSpecFormatter do
         expect(errors.string).to include("HTTP 401")
       end
     end
+
+    # SPGD-1413, and the other half of the example above: that one pins that the
+    # run SURVIVES the double failure, this one pins what it SAYS about it.
+    #
+    # The discriminating assertion is the negative one. Every natural positive
+    # clause here — the prefix, `HTTP 401`, the one-line count — passed
+    # identically before this slice, because the old line carried all three;
+    # what it also carried was `Falling back to <path>; the test run is
+    # unaffected.` emitted *before* the write, and never corrected when that
+    # write failed, because `emit_warning` returns on `@warned`. So the pin is
+    # on the bytes that differ: the "unaffected" promise must be gone and the
+    # queue that was never written must be named as lost. Reverting
+    # `#sink_clause` to the old unconditional promise fails exactly this
+    # example.
+    #
+    # The status is asserted alongside, because the reason the warn-before-write
+    # ORDER was not reversed is that the status is the more actionable fact — a
+    # slice that made the loss speak by dropping `HTTP 401` would have traded
+    # one silence for another.
+    # @intent: { entity: "RSpecFormatter delivery", action: "name a lost run", behavior: "a refused delivery whose replay queue cannot be written prints one line naming the status and the unwritten queue rather than claiming the test run is unaffected", layer: "unit" }
+    it "names the loss instead of claiming the run was saved" do
+      StubIngestEndpoint.run(status: 401) do |server|
+        blocker = File.join(tmpdir, "blocker")
+        File.write(blocker, "not a directory")
+        queue = File.join(blocker, "results.jsonl")
+
+        deliver_to(server, output_path: queue)
+
+        # The load-bearing clause: nothing was saved, so the line must not say
+        # the run is unaffected, and must name the queue it failed to write.
+        expect(errors.string).not_to include("unaffected")
+        expect(errors.string).to include("lost", queue)
+        expect(File.exist?(queue)).to be(false)
+        # The status survives, and so do the budget and the never-fail
+        # contract: making the line true cost none of them.
+        expect(errors.string).to include("HTTP 401")
+        expect(errors.string.scan(/SpecGuard:/).length).to eq(1)
+      end
+    end
   end
 
   # The delivery decision that comes before every other one: was anything
@@ -1454,11 +1493,18 @@ RSpec.describe SpecGuard::RSpecFormatter do
   #
   # Deleting the `rescue` in `never_fail_the_run` fails 17 of this block's 19
   # examples. The count is BLOCK-scoped and says nothing about the rest: the
-  # same mutation fails 18 in this file (the 18th is "survives a fallback write
-  # that fails too", above) and 23 suite-wide (the other 5 are process-level, in
-  # formatter_run_spec.rb's "when the sink cannot be written" and "when the
-  # annotation scanner blows up"). All four figures come from one `bundle exec
-  # rspec` of 601 examples, sliced by scope — not from four separate runs.
+  # same mutation fails 18 in this file and 23 suite-wide (the other 5 are
+  # process-level, in formatter_run_spec.rb's "when the sink cannot be written"
+  # and "when the annotation scanner blows up"). All four figures come from one
+  # `bundle exec rspec` of 1205 examples, sliced by scope — not from four
+  # separate runs, and re-measured at that size by SPGD-1413.
+  #
+  # The 18th, outside this block, is "is not swallowed by a warning budget an
+  # earlier failure already spent". SPGD-1413 removed a 19th: "survives a
+  # fallback write that fails too" used to reach this rescue, because `#append`
+  # let the queue's write raise. It now catches that failure itself and reports
+  # it in the fall-back's own line, so the example no longer depends on this
+  # guard — the run is still never failed by it, by a nearer rescue.
   #
   # The two examples that do NOT fail on deletion are "does NOT swallow an
   # interrupt" and "does NOT swallow an interrupt raised from the lookup", and

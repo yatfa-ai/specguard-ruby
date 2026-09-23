@@ -31,7 +31,9 @@ SPECGUARD_ENDPOINT=https://specguard.example SPECGUARD_API_KEY=sgk_… bundle ex
 
 The plugin rides alongside Minitest's own reporters (the suite's output is unchanged), posts one
 envelope per process with the same field names the RSpec formatter sends, and never fails the run:
-a refused or unreachable delivery costs one line on stderr and a line in the local sink. Without
+a refused or unreachable delivery costs one line on stderr and a line in the replay queue — and
+when that queue cannot be written either, the same one line reports the loss rather than promising
+a file that is not there (see [Shipping the run to SpecGuard](#shipping-the-run-to-specguard)). Without
 `SPECGUARD_API_KEY` nothing is sent — the run is appended to the local development record, exactly
 as the RSpec formatter behaves. Parameterized tests — the `define_method("test_x_#{param}")` loop
 idiom — ship one row per instance, not one row per definition site, so each instance's outcome and
@@ -470,12 +472,12 @@ fork with no secret configured behaves like a laptop rather than like a broken
 build. The local file's name is configurable via `SPECGUARD_LOCAL_OUTPUT_PATH`
 (or `SpecGuard::RSpec.configure { |c| c.local_output_path = ... }`).
 
-**A failed delivery is never silent, and never lost.** If the endpoint refuses
-the run (a `401` from a rotated key, a `400`, a `500`) or cannot be reached at
-all (connection refused, DNS failure, timeout), the formatter prints **one**
-line to stderr naming the status or the error, and writes the payload to
-`log/test_results.jsonl` — the **replay queue**: runs offered to the endpoint
-and not accepted — so the run can be replayed later with
+**A failed delivery is never silent, and the run is kept whenever it can be.**
+If the endpoint refuses the run (a `401` from a rotated key, a `400`, a `500`)
+or cannot be reached at all (connection refused, DNS failure, timeout), the
+formatter prints **one** line to stderr naming the status or the error, and
+writes the payload to `log/test_results.jsonl` — the **replay queue**: runs
+offered to the endpoint and not accepted — so the run can be replayed later with
 [`specguard-ingest`](#replaying-a-saved-run--specguard-ingest):
 
 ```
@@ -502,6 +504,23 @@ out and the rest are counted (`… and 497 more`); anything that arrives without
 a reason it can read — an empty body, or the HTML a proxy answers a `413` with
 — prints the bare status line above and is still reported as a refusal, not as
 an error.
+
+**And when the queue cannot be written either, that same line says so.** A
+refused delivery whose `log/` is unwritable — a read-only mount, a full disk, a
+regular file sitting where the directory should be — really does lose the run,
+and the second half of the line reports the queue rather than promising it:
+
+```
+SpecGuard: could not deliver test telemetry (HTTP 401 — the API key was not
+accepted). The replay queue log/test_results.jsonl could not be written either
+(Errno::EACCES: Permission denied @ rb_sysopen - log/test_results.jsonl), so
+this run's telemetry was lost.
+```
+
+Still one line, still the status first — and still no effect on your suite's
+exit code, which is the only promise SpecGuard makes about a run of yours. Both
+Ruby clients behave this way; the Minitest reporter's sentence is the same
+beyond the wording of the fallback clause.
 
 There are **no retries**, and the whole delivery is bounded by `timeout`
 (10 seconds by default, against `Net::HTTP`'s own 60): telemetry is explicitly
