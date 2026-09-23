@@ -1302,6 +1302,30 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
                                    "(PROTOCOL.md §1.1 requires it)")
     end
 
+    # THE GEM'S HALF — the half that makes the note's promise true. The binary's
+    # wording above arrives through a recorded report, and the gem's cannot:
+    # `both_ways` replays a BINARY document, which structurally carries no
+    # literal of this gem's own. So this drives `Scanner.scan_text` directly, on
+    # a string whose `valid_encoding?` is false, assembled from binary fragments
+    # so the invalid sequence is a property of the FIXTURE rather than of this
+    # source file, which is UTF-8.
+    #
+    # The expected tail is a CAPTURED LITERAL on purpose. An expectation re-read
+    # from `Scanner` would move in lockstep with the string it pins and could
+    # never go red. This one reddens the moment the gem's wording converges on
+    # the binary's — or drifts to any third wording — which is exactly what
+    # `Scanner#scan_text`'s RATIFIED DIFFERENCE note promises happens.
+    # @intent: { entity: "Scanner", action: "refuse a text that is not well-formed UTF-8", behavior: "the gem mints its own invalid-byte-sequence tail rather than the binary's PROTOCOL wording", layer: "unit" }
+    it "mints the gem's own wording, which still differs from the binary's" do
+      text = ("# a spec file\n".b + "\xC3\x28".b + "\n".b).force_encoding(Encoding::UTF_8)
+      expect(text.valid_encoding?).to be(false)
+
+      problems = SpecGuard::RSpec::Scanner.scan_text(text, file: paths.first).map(&:problem)
+
+      expect(problems).to eq(["could not read file: invalid UTF-8 byte sequence"])
+      expect(problems.first).not_to include("input is not well-formed UTF-8")
+    end
+
     # Both name the CONDITION rather than an offset, which is the property
     # `scanner.rb` ratifies the difference ON. Neither claims to know where the
     # bad byte was, because neither stopped to find out.
