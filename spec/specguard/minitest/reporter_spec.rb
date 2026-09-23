@@ -565,6 +565,199 @@ module SpecGuard
             expect(rows.last["intent"]).to include("entity" => "Order", "action" => "refund stock")
           end
         end
+
+        # SPGD-1421. The relativization root and the lookup's read root were
+        # bound at two different MOMENTS — the reporter's memo lazily, on the
+        # first row; the lookup's `Dir.pwd` at construction — and nothing made
+        # them agree. The hurting direction is the SHALLOWER move: a run
+        # constructed in `<root>/work` whose FIRST row lands after the cwd
+        # moved to the ancestor `<root>` relativizes against `<root>` —
+        # `<root>/work/sample_test.rb` reads as `work/sample_test.rb` — and
+        # resolves that spelling against the construction directory, doubling
+        # the segment into `<root>/work/work/sample_test.rb`, which no file
+        # answers. Every readable, correctly annotated spec in the run ships
+        # `unannotated` / `intent: nil`, byte-for-byte what a genuinely
+        # unannotated row reports, so nothing downstream can detect the loss.
+        # The ordering is the discriminator, not the chdir: a row recorded
+        # before the move binds the memo to the construction directory and
+        # the two roots agree by luck — exactly what the SPGD-1417 pin above
+        # leans on with its pre-move control row. Both arms here construct in
+        # `work`; the defect arm records its first row only after the move to
+        # the shallower `root`. The control arm runs with no move at all, so
+        # a rig that degraded to "neither arm annotates" fails rather than
+        # passing on equality. Memo isolation per arm, the same discipline
+        # the pin above applies: cleared before, so each arm's own
+        # construction is what binds the root — never a value an earlier arm
+        # left behind, which would agree with both arms by luck and make
+        # this pin green on the unfixed code; restored after.
+        # @intent: { entity: "Minitest Reporter", action: "annotate after a shallower move", behavior: "a readable annotated suite still annotates when its first row is recorded after the run moves to a shallower directory, both roots reading the one value bound at construction", layer: "unit" }
+        it "annotates a suite whose first row is recorded after the run moves to a shallower directory" do
+          Dir.mktmpdir do |dir|
+            root = File.realpath(dir)
+            work = File.join(root, "work")
+            FileUtils.mkdir_p(work)
+            file = File.join(work, "sample_test.rb")
+            File.write(file, <<~RUBY)
+              class OrdersTest < Minitest::Test
+                # @intent: { entity: "Order", action: "refund stock", behavior: "a refund restores the stock the order consumed", layer: "unit" }
+                def test_restores_stock
+                  assert_equal 1, 1
+                end
+              end
+            RUBY
+            line = File.readlines(file)
+                        .index { |l| l.include?("def test_restores_stock") } + 1
+
+            # One arm, one fresh root: the memo is cleared so the arm's own
+            # construction is what binds it, and restored afterwards whether
+            # or not anything was bound to begin with.
+            run_suite = lambda do |&block|
+              had_repo_root = Reporter.instance_variable_defined?(:@repo_root)
+              previous_repo_root = Reporter.instance_variable_get(:@repo_root) if had_repo_root
+              rows = nil
+              begin
+                Reporter.remove_instance_variable(:@repo_root) if had_repo_root
+                Dir.chdir(work) do
+                  reporter = Reporter.new(configuration: configuration(base_env),
+                                          transport: recording_transport.first, output: StringIO.new,
+                                          annotations: stub_validator_annotations)
+                  block.call(reporter)
+                  reporter.report
+                  rows = reporter.instance_variable_get(:@rows)
+                end
+              ensure
+                if had_repo_root
+                  Reporter.instance_variable_set(:@repo_root, previous_repo_root)
+                elsif Reporter.instance_variable_defined?(:@repo_root)
+                  Reporter.remove_instance_variable(:@repo_root)
+                end
+              end
+              rows
+            end
+
+            # The control: no move at all — construction, the single row and
+            # delivery all happen in `work`.
+            control_rows = run_suite.call do |reporter|
+              reporter.record(result(:passed, location: [file, line]))
+            end
+
+            # The defect arm: construction in `work`, FIRST row recorded only
+            # after the move to the shallower `root`.
+            moved_rows = run_suite.call do |reporter|
+              Dir.chdir(root) do
+                reporter.record(result(:passed, location: [file, line]))
+              end
+            end
+
+            expect(control_rows.map { |row| row["status"] }).to eq(%w[annotated])
+            expect(control_rows.first["intent"])
+              .to include("entity" => "Order", "action" => "refund stock")
+            expect(moved_rows.map { |row| row["file_path"] }).to eq(%w[sample_test.rb])
+            expect(moved_rows.map { |row| row["status"] }).to eq(%w[annotated])
+            expect(moved_rows.first["intent"])
+              .to include("entity" => "Order", "action" => "refund stock")
+          end
+        end
+
+        # SPGD-1421, review round. The pin above hands the lookup in through
+        # `annotations:`, so it pins the reporter's own root binding and is
+        # structurally blind to the HAND-OVER: `initialize` building the
+        # default lookup with `root: root`, and the lookup keeping that value.
+        # The production constructor (`lib/minitest/specguard_plugin.rb`)
+        # passes no `annotations:`, so the hand-over is the only construction
+        # production ever runs — and a refactor that accepts the `root:`
+        # parameter and silently discards it (`AnnotationLookup.new` at the
+        # call site, or `@root = Dir.pwd` in the lookup) leaves the suite
+        # green while reopening this ticket's silent annotation loss, the
+        # doubled root one level down: relativized against `dir`, the fixture
+        # reads `sample_test.rb`, which a lookup rooted at the construction
+        # cwd resolves into `<dir>/work/sample_test.rb`, no file answers, and
+        # the row ships `unannotated` indistinguishably from a genuinely
+        # unannotated one. This pin exercises that default path: the memo is
+        # PRE-BOUND to `dir` and construction happens one directory deeper,
+        # in `work`, so the row can only annotate if the lookup resolved
+        # against the value the reporter handed over. The control arm binds
+        # the memo to the same directory it constructs in — where even a
+        # lookup that ignored its parameter annotates, the cwd being the
+        # root — so a rig that degraded to "neither arm annotates" fails
+        # rather than passing on equality. The default lookup reads `ENV`
+        # (that is what "default" means here), so the example points
+        # `SPECGUARD_VALIDATE_INTENT` at the stub validator for its own
+        # duration and restores the process env afterwards; the memo is set
+        # and restored per arm, the same isolation discipline the pins above
+        # apply.
+        # @intent: { entity: "Minitest Reporter", action: "hand one root to the lookup it builds itself", behavior: "the default lookup the reporter constructs resolves relative spellings against the same construction-time root the reporter relativizes with, so the two bindings cannot drift", layer: "unit" }
+        it "hands the root it bound at construction to the default lookup it builds itself" do
+          Dir.mktmpdir do |dir|
+            dir = File.realpath(dir)
+            work = File.join(dir, "work")
+            FileUtils.mkdir_p(work)
+            file = File.join(dir, "sample_test.rb")
+            File.write(file, <<~RUBY)
+              class OrdersTest < Minitest::Test
+                # @intent: { entity: "Order", action: "refund stock", behavior: "a refund restores the stock the order consumed", layer: "unit" }
+                def test_restores_stock
+                  assert_equal 1, 1
+                end
+              end
+            RUBY
+            line = File.readlines(file)
+                        .index { |l| l.include?("def test_restores_stock") } + 1
+
+            # One arm, one fresh root and one fresh env: the memo is SET, not
+            # cleared — the arm's pre-bound value is the given — and both it
+            # and `SPECGUARD_VALIDATE_INTENT` are restored afterwards whether
+            # or not anything was bound to begin with.
+            run_suite = lambda do |memo_root|
+              had_repo_root = Reporter.instance_variable_defined?(:@repo_root)
+              previous_repo_root = Reporter.instance_variable_get(:@repo_root) if had_repo_root
+              had_env = ENV.key?("SPECGUARD_VALIDATE_INTENT")
+              previous_env = ENV["SPECGUARD_VALIDATE_INTENT"]
+              rows = nil
+              begin
+                Reporter.instance_variable_set(:@repo_root, memo_root)
+                ENV["SPECGUARD_VALIDATE_INTENT"] = ValidatorStub.install_stubbable
+                Dir.chdir(work) do
+                  # No `annotations:`: the lookup `initialize` builds itself —
+                  # the only construction production runs.
+                  reporter = Reporter.new(configuration: configuration(base_env),
+                                          transport: recording_transport.first, output: StringIO.new)
+                  reporter.record(result(:passed, location: [file, line]))
+                  reporter.report
+                  rows = reporter.instance_variable_get(:@rows)
+                end
+              ensure
+                if had_repo_root
+                  Reporter.instance_variable_set(:@repo_root, previous_repo_root)
+                elsif Reporter.instance_variable_defined?(:@repo_root)
+                  Reporter.remove_instance_variable(:@repo_root)
+                end
+                if had_env
+                  ENV["SPECGUARD_VALIDATE_INTENT"] = previous_env
+                else
+                  ENV.delete("SPECGUARD_VALIDATE_INTENT")
+                end
+              end
+              rows
+            end
+
+            # The control: the memo bound to the construction directory
+            # itself.
+            control_rows = run_suite.call(work)
+
+            # The defect arm: the memo bound one directory ABOVE the
+            # construction cwd.
+            moved_rows = run_suite.call(dir)
+
+            expect(control_rows.map { |row| row["status"] }).to eq(%w[annotated])
+            expect(control_rows.first["intent"])
+              .to include("entity" => "Order", "action" => "refund stock")
+            expect(moved_rows.map { |row| row["file_path"] }).to eq(%w[sample_test.rb])
+            expect(moved_rows.map { |row| row["status"] }).to eq(%w[annotated])
+            expect(moved_rows.first["intent"])
+              .to include("entity" => "Order", "action" => "refund stock")
+          end
+        end
       end
 
       describe "the ingestible floor" do

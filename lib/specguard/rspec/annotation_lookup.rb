@@ -168,12 +168,21 @@ module SpecGuard
       # the cwd never moves, resolution is the identity on every path the
       # suite hands over.
       #
+      # SPGD-1421 added the `root` parameter for the same one-binding rule one
+      # level up: the Minitest reporter binds its own relativization root at
+      # construction and hands that value here, so both halves of one run
+      # resolve against ONE root instead of each reading `Dir.pwd` at its own
+      # moment. The default keeps this constructor's own SPGD-1417 binding —
+      # the caller's cwd, read at construction, never re-read per read.
+      #
       # @param env [Hash, ENV] where `SPECGUARD_VALIDATE_INTENT` is read from.
       #   Injected for testing, and read LAZILY — see {#backend}.
-      def initialize(env: ENV)
+      # @param root [String] the directory relative spellings resolve against;
+      #   bound here, no later than construction, whatever its source.
+      def initialize(env: ENV, root: Dir.pwd)
         @env = env
         @indexes = {}
-        @root = Dir.pwd
+        @root = root
       end
 
       # The intent to attach to one example, or nil when it is unannotated.
