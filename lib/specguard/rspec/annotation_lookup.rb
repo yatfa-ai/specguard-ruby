@@ -169,11 +169,13 @@ module SpecGuard
       # suite hands over.
       #
       # SPGD-1421 added the `root` parameter for the same one-binding rule one
-      # level up: the Minitest reporter binds its own relativization root at
-      # construction and hands that value here, so both halves of one run
-      # resolve against ONE root instead of each reading `Dir.pwd` at its own
-      # moment. The default keeps this constructor's own SPGD-1417 binding —
-      # the caller's cwd, read at construction, never re-read per read.
+      # level up: the client binds its own relativization root at construction
+      # and hands that value here, so both halves of one run resolve against
+      # ONE root instead of each reading `Dir.pwd` at its own moment. Both
+      # Ruby clients hand that value over now — the Minitest reporter since
+      # SPGD-1421, the RSpec formatter since SPGD-1429. The default keeps
+      # this constructor's own SPGD-1417 binding — the caller's cwd, read at
+      # construction, never re-read per read.
       #
       # @param env [Hash, ENV] where `SPECGUARD_VALIDATE_INTENT` is read from.
       #   Injected for testing, and read LAZILY — see {#backend}.

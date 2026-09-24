@@ -103,7 +103,10 @@ module SpecGuard
         # load-bearing even when a lookup is injected (the specs do): it pins
         # the relativization root at construction, so no row can ever bind it
         # somewhere the lookup is not. The default lookup is handed that same
-        # value; `#relative_path` reads the same memo.
+        # value; `#relative_path` reads the same memo. (SPGD-1429 extends the
+        # same one-binding hand-over to the RSpec formatter: its constructor
+        # binds one root, hands it to the default lookup, and pins rspec-core's
+        # lazily memoized relativization regex to the same moment.)
         root = self.class.repo_root
         @annotations = annotations || SpecGuard::RSpec::AnnotationLookup.new(root: root)
         @clock = clock

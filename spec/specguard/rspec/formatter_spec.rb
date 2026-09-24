@@ -4,6 +4,7 @@ require "tmpdir"
 require "specguard/rspec/formatter"
 
 require_relative "../../support/stub_ingest_endpoint"
+require_relative "../../support/validator_stub"
 
 # What the formatter captures, where it puts it, and — the part that matters
 # most — what it does when any of that goes wrong.
@@ -702,6 +703,209 @@ RSpec.describe SpecGuard::RSpecFormatter do
 
       expect(spec.values_at("id", "spec_file_path", "file_path"))
         .to eq(["#{outside}[1:1]", outside, outside])
+    end
+  end
+
+  # SPGD-1429. The formatter bound TWO roots at TWO moments and nothing made
+  # them agree: the annotation lookup's read root, at construction, and
+  # rspec-core's relativization root — `Metadata.relative_path_regex`
+  # memoizes `Dir.pwd` on its first READ — on the first captured row, after
+  # the spec files have loaded. A suite whose cwd moves to a SHALLOWER
+  # ancestor in between relativized its rows against the moved-to directory
+  # and resolved those spellings against the construction one —
+  # `<root>/work/sample_spec.rb` read as `work/sample_spec.rb` under
+  # construction root `<root>/work` resolves into the doubled
+  # `<root>/work/work/...`, which no file answers — so every readable,
+  # correctly annotated spec in the run shipped `unannotated` /
+  # `intent: nil`, byte-for-byte what a genuinely unannotated row reports.
+  # A DEEPER move is measured-immune: the prefix fails the regex, the path
+  # passes through absolute, and the lookup resolves absolutes untouched —
+  # which is why every earlier sweep of this file checked one root and
+  # called it immune. The constructor now binds one root at construction and
+  # hands it to the default lookup, pinning rspec-core's regex to the same
+  # moment; the pins below isolate each half. The end-to-end half — a real
+  # child run whose first lookup lands after a load-time chdir — lives in
+  # formatter_run_spec.rb.
+  #
+  # Both examples isolate the memos per arm, the same discipline
+  # reporter_spec.rb's SPGD-1421 pins apply: cleared before the arm's own
+  # construction, so each arm binds its own roots and never a value an
+  # earlier example left behind (which would agree with both arms by luck
+  # and make the pin green on the unfixed code), restored afterwards whether
+  # or not anything was bound — the real `relative_path` examples above and
+  # below read the regex memo against the suite's own cwd and would break
+  # under a leaked tmpdir binding.
+  describe "the construction-time root (SPGD-1429)" do
+    def write_annotated_fixture(dir)
+      file = File.join(dir, "sample_spec.rb")
+      File.write(file, <<~RUBY)
+        RSpec.describe "orders" do
+          # @intent: { entity: "Order", action: "refund stock", behavior: "a refund restores the stock the order consumed", layer: "unit" }
+          it "restores stock" do
+            expect(1).to eq(1)
+          end
+        end
+      RUBY
+      [file, File.readlines(file).index { |l| l.include?('it "restores stock"') } + 1]
+    end
+
+    def finish_on(formatter_instance, file, line)
+      formatter_instance.example_finished(
+        instance_double(RSpec::Core::Notifications::ExampleNotification,
+                        example: build_example(file_path: file, line_number: line))
+      )
+    end
+
+    # Saves, clears and restores BOTH memos an arm binds: the formatter's
+    # own construction root and rspec-core's relativization regex.
+    def with_isolated_memos
+      had_root = described_class.instance_variable_defined?(:@repo_root)
+      previous_root = described_class.instance_variable_get(:@repo_root) if had_root
+      had_regex = ::RSpec::Core::Metadata.instance_variable_defined?(:@relative_path_regex)
+      previous_regex =
+        ::RSpec::Core::Metadata.instance_variable_get(:@relative_path_regex) if had_regex
+      # Cleared, not merely saved: each arm's own construction is what binds
+      # both — never a value an earlier example left behind, which would
+      # agree with both arms by luck and make the pin green on the unfixed
+      # code. (The formatter's memo binds at first read too, so an uncleared
+      # @repo_root would hand every arm the suite's own cwd.)
+      described_class.remove_instance_variable(:@repo_root) if had_root
+      ::RSpec::Core::Metadata.remove_instance_variable(:@relative_path_regex) if had_regex
+      yield
+    ensure
+      if had_root
+        described_class.instance_variable_set(:@repo_root, previous_root)
+      elsif described_class.instance_variable_defined?(:@repo_root)
+        described_class.remove_instance_variable(:@repo_root)
+      end
+      if had_regex
+        ::RSpec::Core::Metadata.instance_variable_set(:@relative_path_regex, previous_regex)
+      elsif ::RSpec::Core::Metadata.instance_variable_defined?(:@relative_path_regex)
+        ::RSpec::Core::Metadata.remove_instance_variable(:@relative_path_regex)
+      end
+    end
+
+    # The root-binding half, mirroring reporter_spec.rb's "annotates a suite
+    # whose first row is recorded after the run moves to a shallower
+    # directory": the lookup is INJECTED here — rooted at the construction
+    # cwd, which is what the default lookup's own binding does — so this pin
+    # says nothing about the hand-over and the next example says nothing
+    # about the root. Both arms construct in `work`; the defect arm captures
+    # its first row only after the move to the shallower `dir`. The control
+    # arm runs with no move at all, so a rig that degraded to "neither arm
+    # annotates" fails rather than passing on equality.
+    # @intent: { entity: "RSpecFormatter", action: "annotate after a shallower move", behavior: "a readable annotated suite still annotates when its first lookup happens after the suite moves to a shallower directory, both roots reading the one value bound at construction", layer: "unit" }
+    it "annotates a suite whose first lookup happens after the suite moves to a shallower directory" do
+      dir = File.realpath(tmpdir)
+      work = File.join(dir, "work")
+      Dir.mkdir(work)
+      file, line = write_annotated_fixture(work)
+
+      run_suite = lambda do |&capture_block|
+        specs = nil
+        with_isolated_memos do
+          Dir.chdir(work) do
+            lookup = SpecGuard::RSpec::AnnotationLookup.new(
+              env: { "SPECGUARD_VALIDATE_INTENT" => ValidatorStub.install_stubbable }
+                .merge(ValidatorStub.stub_env)
+            )
+            moved_formatter = described_class.new(output, error_stream: errors, annotations: lookup)
+            capture_block.call(moved_formatter)
+            specs = moved_formatter.payload["specs"]
+          end
+        end
+        specs
+      end
+
+      # The control: construction, the single lookup and delivery all happen
+      # in `work`.
+      control_specs = run_suite.call { |f| finish_on(f, file, line) }
+
+      # The defect arm: construction in `work`, FIRST lookup only after the
+      # move to the shallower `dir`.
+      moved_specs = run_suite.call { |f| Dir.chdir(dir) { finish_on(f, file, line) } }
+
+      expect(control_specs.map { |spec| spec["status"] }).to eq(%w[annotated])
+      expect(control_specs.first["intent"])
+        .to include("entity" => "Order", "action" => "refund stock")
+      expect(moved_specs.map { |spec| spec["file_path"] }).to eq(%w[sample_spec.rb])
+      expect(moved_specs.map { |spec| spec["status"] }).to eq(%w[annotated])
+      expect(moved_specs.first["intent"])
+        .to include("entity" => "Order", "action" => "refund stock")
+    end
+
+    # The hand-over half, mirroring reporter_spec.rb's "hands the root it
+    # bound at construction to the default lookup it builds itself". The pin
+    # above hands the lookup in through `annotations:`, so it is structurally
+    # blind to the HAND-OVER: `initialize` building the default lookup with
+    # `root: root`, and the lookup keeping that value. The production
+    # constructor passes no `annotations:`, so the hand-over is the only
+    # construction production ever runs — and a refactor that binds the root
+    # and silently discards it at the call site leaves the suite green while
+    # reopening this ticket's silent annotation loss. This pin exercises the
+    # default path: the construction-root memo is PRE-BOUND to `dir` and
+    # construction happens one directory deeper, in `work`, where a lookup
+    # rooted at the construction cwd instead cannot find `dir`-relative
+    # spellings. rspec-core's regex is pre-bound to the memo root too, so the
+    # row relativizes to a `dir`-relative spelling that ONLY a lookup handed
+    # `dir` can resolve — an absolute passthrough would otherwise let either
+    # arm annotate with the hand-over discarded. The control arm binds the
+    # memo to the construction directory itself, where the fixture falls
+    # outside the regex and passes through absolute — findable by any root —
+    # so a rig that degraded to "neither arm annotates" fails rather than
+    # passing on equality. The default lookup reads `ENV` (that is what
+    # "default" means here), so the example points
+    # `SPECGUARD_VALIDATE_INTENT` at the stub validator for its own duration
+    # and restores the process env afterwards.
+    # @intent: { entity: "RSpecFormatter", action: "hand one root to the lookup it builds itself", behavior: "the default lookup the constructor builds resolves relative spellings against the same construction-time root the formatter relativizes with, so the two bindings cannot drift", layer: "unit" }
+    it "hands the root it bound at construction to the default lookup it builds itself" do
+      dir = File.realpath(tmpdir)
+      work = File.join(dir, "work")
+      Dir.mkdir(work)
+      file, line = write_annotated_fixture(dir)
+
+      run_suite = lambda do |memo_root|
+        had_env = ENV.key?("SPECGUARD_VALIDATE_INTENT")
+        previous_env = ENV["SPECGUARD_VALIDATE_INTENT"]
+        specs = nil
+        with_isolated_memos do
+          begin
+            described_class.instance_variable_set(:@repo_root, memo_root)
+            ENV["SPECGUARD_VALIDATE_INTENT"] = ValidatorStub.install_stubbable
+            # Pre-bind rspec's regex at the memo root, BEFORE construction:
+            # the constructor's own pinning no-ops on a bound memo, so the
+            # arm's relativization is exactly this binding.
+            Dir.chdir(memo_root) { ::RSpec::Core::Metadata.relative_path_regex }
+            Dir.chdir(work) do
+              handover_formatter = described_class.new(output, error_stream: errors)
+              finish_on(handover_formatter, file, line)
+              specs = handover_formatter.payload["specs"]
+            end
+          ensure
+            if had_env
+              ENV["SPECGUARD_VALIDATE_INTENT"] = previous_env
+            else
+              ENV.delete("SPECGUARD_VALIDATE_INTENT")
+            end
+          end
+        end
+        specs
+      end
+
+      # The control: the memo bound to the construction directory itself.
+      control_specs = run_suite.call(work)
+
+      # The defect arm: the memo bound one directory ABOVE the construction
+      # cwd — only a lookup handed that memo's value can resolve the row.
+      moved_specs = run_suite.call(dir)
+
+      expect(control_specs.map { |spec| spec["status"] }).to eq(%w[annotated])
+      expect(control_specs.first["intent"])
+        .to include("entity" => "Order", "action" => "refund stock")
+      expect(moved_specs.map { |spec| spec["file_path"] }).to eq(%w[sample_spec.rb])
+      expect(moved_specs.map { |spec| spec["status"] }).to eq(%w[annotated])
+      expect(moved_specs.first["intent"])
+        .to include("entity" => "Order", "action" => "refund stock")
     end
   end
 

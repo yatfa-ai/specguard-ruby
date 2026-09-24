@@ -255,6 +255,24 @@ module SpecGuard
       example_started example_passed example_failed example_pending dump_summary
     ].freeze
 
+    class << self
+      # `Dir.pwd` bound once — by the first formatter construction (whose
+      # `#initialize` reads it, SPGD-1429) or the first direct read — never
+      # per row: a suite that changes the working directory after the
+      # formatter was built would otherwise relativize one run's rows
+      # against two different roots. The memo is what binds it — an
+      # unmemoized `Dir.pwd` here re-reads the cwd on every read and is
+      # exactly the two-root split the constructor's comment names, with
+      # both spellings individually well-formed so nothing downstream can
+      # detect the drift. The memo is also the ONE value the default
+      # annotation lookup reads against: `#initialize` hands it over, so
+      # the relativization root and the lookup's read root cannot drift
+      # apart the way they did when each bound `Dir.pwd` at its own moment.
+      def repo_root
+        @repo_root ||= Dir.pwd
+      end
+    end
+
     # @param output [IO] the stream RSpec hands every formatter. This class's
     #   product is a file, so nothing in the capture path writes here — but the
     #   stream is *not* unused, and a reader who is here because stdout went
@@ -287,11 +305,40 @@ module SpecGuard
     #   `SpecGuard::AnnotationLookup`, neither of which exists — a NameError
     #   raised from a formatter's constructor, which RSpec reports as
     #   "No examples found".
-    def initialize(output = nil, error_stream: $stderr,
-                   annotations: SpecGuard::RSpec::AnnotationLookup.new)
+    #
+    #   Omitted or nil, the constructor builds the default lookup itself and
+    #   hands it the one root bound below — the only construction production
+    #   ever runs, and the arm that makes the hand-over observable.
+    def initialize(output = nil, error_stream: $stderr, annotations: nil)
       super(output)
+      # ONE binding, ONE moment (SPGD-1429). This constructor used to bind two
+      # roots at two moments and nothing made them agree: the lookup's read
+      # root here, at construction, and rspec-core's relativization root —
+      # `Metadata.relative_path_regex` memoizes `Dir.pwd` on its first READ —
+      # on the first captured row, after the spec files have loaded. A suite
+      # whose cwd moves to a SHALLOWER ancestor in between relativized its
+      # rows against the moved-to directory and resolved those spellings
+      # against the construction one — `<root>/work/sample_spec.rb` read as
+      # `work/sample_spec.rb` under construction root `<root>/work` resolves
+      # into the doubled `<root>/work/work/...`, which no file answers — so
+      # every readable, correctly annotated spec in the run shipped
+      # `unannotated` with nothing downstream able to tell. The same
+      # two-root split `SPGD-1421` closed on the Minitest reporter, whose
+      # `reporter.rb` comment is the reference for this repair. Both halves
+      # now read one value, bound at construction — the earlier of the two
+      # moments, and the one `SPGD-1417` already gave the lookup.
+      #
+      # Reading the memo is load-bearing even when a lookup is injected (the
+      # specs do): `#relative_path` delegates to rspec-core either way, so
+      # pinning the regex here is what stops any row from binding it somewhere
+      # the lookup is not. The reader binds only when unbound — when something
+      # has already bound it, the read is a no-op and rspec-core's own value
+      # is left alone: its memoization is correct for what it does, and
+      # overwriting a bound value would second-guess it.
+      root = self.class.repo_root
+      ::RSpec::Core::Metadata.relative_path_regex
       @error_stream = error_stream
-      @annotations = annotations
+      @annotations = annotations || SpecGuard::RSpec::AnnotationLookup.new(root: root)
       @specs = []
       @warned = false
       # Stamped here rather than from a `start` hook on purpose. `:start` is not
