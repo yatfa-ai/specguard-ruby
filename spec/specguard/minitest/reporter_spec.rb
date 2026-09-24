@@ -29,6 +29,27 @@ module SpecGuard
         SpecGuard::RSpec::Configuration.new(env: env)
       end
 
+      # `Reporter.repo_root` memoizes into a class-level ivar on the
+      # singleton, so it outlives the example that first reads it — including
+      # the reads the six `result` fixture sites in this file make. This
+      # borrows it for one example at a time and puts the process back
+      # exactly as it was found: cleared before, so the block's own `Dir.pwd`
+      # is what binds; restored after, whether or not anything was bound to
+      # begin with. It lives here and not in `lib/` — the library has no
+      # reason to offer a way to unbind a root that is meant to be bound once.
+      def with_unbound_repo_root
+        had = Reporter.instance_variable_defined?(:@repo_root)
+        previous = Reporter.instance_variable_get(:@repo_root) if had
+        Reporter.remove_instance_variable(:@repo_root) if had
+        yield
+      ensure
+        if had
+          Reporter.instance_variable_set(:@repo_root, previous)
+        elsif Reporter.instance_variable_defined?(:@repo_root)
+          Reporter.remove_instance_variable(:@repo_root)
+        end
+      end
+
       # A real `::Minitest::Result`, built the way Minitest builds them — through
       # the same failure objects its own reporters see, so the outcome mapping
       # is exercised against `Result#passed?`/`#skipped?` rather than a stand-in
@@ -141,27 +162,6 @@ module SpecGuard
       end
 
       describe "the relativization root" do
-        # `Reporter.repo_root` memoizes into a class-level ivar on the
-        # singleton, so it outlives the example that first reads it — including
-        # the reads the six `result` fixture sites in this file make. This
-        # borrows it for one example and puts the process back exactly as it
-        # was found: cleared before, so the block's own `Dir.pwd` is what
-        # binds; restored after, whether or not anything was bound to begin
-        # with. It lives here and not in `lib/` — the library has no reason to
-        # offer a way to unbind a root that is meant to be bound once.
-        def with_unbound_repo_root
-          had = Reporter.instance_variable_defined?(:@repo_root)
-          previous = Reporter.instance_variable_get(:@repo_root) if had
-          Reporter.remove_instance_variable(:@repo_root) if had
-          yield
-        ensure
-          if had
-            Reporter.instance_variable_set(:@repo_root, previous)
-          elsif Reporter.instance_variable_defined?(:@repo_root)
-            Reporter.remove_instance_variable(:@repo_root)
-          end
-        end
-
         # @intent: { entity: "Minitest Reporter", action: "relativize rows against one root", behavior: "every row of one run is relativized against the root bound when the run began, so a working-directory change mid-suite does not emit some rows relative and others absolute", layer: "unit" }
         it "keeps every row of one run in one path register when the suite changes directory mid-run" do
           Dir.mktmpdir do |dir|
@@ -506,10 +506,10 @@ module SpecGuard
         # on any root behaviour at all. The second file is the one whose
         # FIRST lookup happens inside the moved directory; the first is the
         # control that proves the fixture and the stub validator annotate.
-        # The memo isolation is the same discipline the "the relativization
-        # root" block applies to the reporter's own root: cleared before, so
-        # the block's chdir is what binds it; restored after, whether or not
-        # anything was bound to begin with.
+        # The memo isolation is `with_unbound_repo_root`: cleared before, so
+        # the block's chdir is what binds it; never a value an earlier
+        # example left behind; restored after, whether or not anything was
+        # bound to begin with.
         # @intent: { entity: "Minitest Reporter", action: "annotate across a mid-run chdir", behavior: "a readable annotated suite still resolves after the run changes directory, the lookup reading against the root bound at its construction", layer: "unit" }
         it "still annotates a readable suite after the run changes directory mid-run" do
           Dir.mktmpdir do |dir|
@@ -530,11 +530,7 @@ module SpecGuard
             line = File.readlines(before_file)
                         .index { |l| l.include?("def test_restores_stock") } + 1
 
-            had_repo_root = Reporter.instance_variable_defined?(:@repo_root)
-            previous_repo_root = Reporter.instance_variable_get(:@repo_root) if had_repo_root
-            rows = nil
-            begin
-              Reporter.remove_instance_variable(:@repo_root) if had_repo_root
+            rows = with_unbound_repo_root do
               Dir.chdir(root) do
                 reporter = Reporter.new(configuration: configuration(base_env),
                                         transport: recording_transport.first, output: StringIO.new,
@@ -549,13 +545,7 @@ module SpecGuard
                   reporter.record(result(:passed, location: [after_file, line]))
                 end
                 reporter.report
-                rows = reporter.instance_variable_get(:@rows)
-              end
-            ensure
-              if had_repo_root
-                Reporter.instance_variable_set(:@repo_root, previous_repo_root)
-              elsif Reporter.instance_variable_defined?(:@repo_root)
-                Reporter.remove_instance_variable(:@repo_root)
+                reporter.instance_variable_get(:@rows)
               end
             end
 
@@ -585,8 +575,8 @@ module SpecGuard
         # `work`; the defect arm records its first row only after the move to
         # the shallower `root`. The control arm runs with no move at all, so
         # a rig that degraded to "neither arm annotates" fails rather than
-        # passing on equality. Memo isolation per arm, the same discipline
-        # the pin above applies: cleared before, so each arm's own
+        # passing on equality. Memo isolation per arm, via
+        # `with_unbound_repo_root`: cleared before, so each arm's own
         # construction is what binds the root — never a value an earlier arm
         # left behind, which would agree with both arms by luck and make
         # this pin green on the unfixed code; restored after.
@@ -608,31 +598,21 @@ module SpecGuard
             line = File.readlines(file)
                         .index { |l| l.include?("def test_restores_stock") } + 1
 
-            # One arm, one fresh root: the memo is cleared so the arm's own
-            # construction is what binds it, and restored afterwards whether
-            # or not anything was bound to begin with.
+            # One arm, one fresh root: `with_unbound_repo_root` clears the
+            # memo so the arm's own construction is what binds it — never a
+            # value an earlier arm left behind — and restores it afterwards
+            # whether or not anything was bound to begin with.
             run_suite = lambda do |&block|
-              had_repo_root = Reporter.instance_variable_defined?(:@repo_root)
-              previous_repo_root = Reporter.instance_variable_get(:@repo_root) if had_repo_root
-              rows = nil
-              begin
-                Reporter.remove_instance_variable(:@repo_root) if had_repo_root
+              with_unbound_repo_root do
                 Dir.chdir(work) do
                   reporter = Reporter.new(configuration: configuration(base_env),
                                           transport: recording_transport.first, output: StringIO.new,
                                           annotations: stub_validator_annotations)
                   block.call(reporter)
                   reporter.report
-                  rows = reporter.instance_variable_get(:@rows)
-                end
-              ensure
-                if had_repo_root
-                  Reporter.instance_variable_set(:@repo_root, previous_repo_root)
-                elsif Reporter.instance_variable_defined?(:@repo_root)
-                  Reporter.remove_instance_variable(:@repo_root)
+                  reporter.instance_variable_get(:@rows)
                 end
               end
-              rows
             end
 
             # The control: no move at all — construction, the single row and
