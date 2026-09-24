@@ -687,7 +687,11 @@ named, rather than blindly re-sent:
 bundle exec specguard-ingest --from-line 7 log/test_results.jsonl
 ```
 
-The numbering never shifts: line 7 is line 7 of the file you gave it, both times.
+The numbering never shifts between invocations that do not drain: line 7 is
+line 7 of the file you gave it, both times. (`--drain` is the one exception —
+removing the accepted lines renumbers what is left, so a drain report's numbers
+describe the file as it was read, not as the next run finds it; see
+[Draining the queue as it is accepted](#draining-the-queue-as-it-is-accepted---drain).)
 Re-sending a line that already landed is harmless *only* when it carries a
 `ci_run_id` — that is the identity SpecGuard folds a redelivery onto. A line
 **without** one has nothing to fold onto and becomes a second run, and a keyless
@@ -875,6 +879,19 @@ The rewrite is **atomic**: a temporary file in the same directory, renamed over
 the original, so a failure mid-drain leaves the file exactly as it was — and
 nothing is written at all unless something was actually accepted.
 
+**The removal renumbers what it leaves.** The rewrite keeps the surviving lines
+byte for byte and in order, and packing them up from the top gives them new
+numbers: a queue of `[accepted, not delivered, accepted]` becomes a two-line
+file whose former lines 2 and 3 are now lines 1 and 2 — while the report above
+still says `line 2`, because that number describes the file **as it was read**.
+That is deliberate: the report is a receipt about the file this invocation
+opened, and emitting post-drain numbers would make it disagree with the file it
+read. So do **not** feed a drain report's numbers to the next command's
+`--from-line` or `--lines` — when lines remain, the summary's drain clause says
+so in as many words. The resume is simply: re-run `--list` to see the
+renumbered file, or run `--drain` again. The "the numbering never shifts"
+guarantee holds between invocations that do not drain.
+
 **A concurrent append is carried.** The formatter appends to the queue with no
 lock, so a run can land while the deliveries are still going. Bytes appended
 after the file was read and before the rewrite are carried into it verbatim.
@@ -892,7 +909,10 @@ is nothing for it to drain.
 
 The removal is **stated, never silent**: the summary gains the clause above,
 and the `--json` document's `summary` carries a `drained` count (absent without
-the flag). A drain that cannot complete is a `2` — the delivery report still
+the flag). When lines remain after the rewrite, the clause carries its second
+half and says so: the surviving lines are renumbered, and the report's numbers
+above — which describe the file as it was read — no longer address it. A drain
+that cannot complete is a `2` — the delivery report still
 prints in full, a warning on stderr names the file, and the file is left as it
 was, because a `0` would read as "drained" about a queue that was not.
 
@@ -959,7 +979,7 @@ bundle exec specguard-ingest --json log/test_results.jsonl
 | `summary.blank` / `skipped` | the two ways a line of the file is not a row here, counted rather than dropped |
 | `summary.absent` | the `--lines` numbers the file does not have, in the shorthand you typed them — a number or an `N-M` range per entry — or `null` when the selector was fully satisfied; never `[]`, on `selector`'s terms |
 | `summary.selector` | `"--lines"`, `"--from-line"`, or `null` when nothing was held back |
-| `summary.drained` | with `--drain`: how many accepted lines were removed from the file — `0` where the flag asked and nothing was accepted. Absent without the flag, and never present under `--list`, which cannot drain |
+| `summary.drained` | with `--drain`: how many accepted lines were removed from the file — `0` where the flag asked and nothing was accepted. Absent without the flag, and never present under `--list`, which cannot drain. When `drained` is greater than `0`, each `lines[].number` refers to the file **before** the drain: the rewrite renumbers the lines it leaves, so those numbers describe the file as it was read and no longer address the rewritten file |
 | `lines[]` | one entry per row, in the file's order |
 | `foldings[]` | folding, **observed**: the lines that went out with one `ci_run_id` and came back with one `test_run_id`. The same statement the text report makes as a sentence |
 
