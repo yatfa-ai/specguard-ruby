@@ -1292,7 +1292,68 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
         expect(server.requests.length).to eq(3)
         expect(File.binread(mixed_sink)).to eq(mixed_kept)
         expect(out).to include("delivered 1 of 4 runs from #{mixed_sink}")
-        expect(out).to include("; 1 accepted line removed from #{mixed_sink}")
+        expect(out).to include("; 1 accepted line removed from #{mixed_sink} — " \
+                               "the 4 lines left are now numbered from 1, so the numbers above no longer address them")
+      end
+    end
+
+    # AC1, negative-first. A partly-accepted queue is exactly what --drain is
+    # for, and the rewrite RENUMBERS what it leaves: the former line 2 becomes
+    # line 1 of the rewritten file, while the report above still says "line 2"
+    # — because the report describes the file as it was READ. The summary says
+    # so in as many words: the numbers it just printed no longer address the
+    # file the next invocation opens, so resuming from the report's numbers
+    # (here `--from-line 2`) would name a different line or nothing at all.
+    # The full pin is deliberate: it shows the very mismatch the clause is
+    # about — the report's "line 2" against a rewritten file whose only line
+    # is the undelivered one — and pins the exact wording a consumer reads.
+    # @intent: { entity: "specguard-ingest --drain", action: "state the renumbering", behavior: "a drain that leaves lines behind says the reported numbers are pre-drain and no longer address the file", layer: "unit" }
+    it "says the reported numbers are pre-drain when the drain leaves lines behind" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"), run_payload(ci_run_id: "c"))
+
+      StubIngestEndpoint.run(responses: [{}, outage, {}]) do |server|
+        code = drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])
+
+        # The undelivered line is still in the file, and the exit code shouts
+        # the one that leaves work undone.
+        expect(code).to eq(2)
+        expect(server.requests.length).to eq(3)
+        expect(File.binread(path)).to eq("#{JSON.generate(run_payload(ci_run_id: 'b'))}\n")
+        expect(out).to eq(<<~OUT)
+          line 1: accepted — HTTP 202, test_run_id 9f8e7d6, ci_run_id a
+          line 2: not delivered — HTTP 503 — upstream is down
+          line 3: accepted — HTTP 202, test_run_id 9f8e7d6, ci_run_id c
+          specguard-ingest: delivered 2 of 3 runs from #{path}; 1 could not be delivered; 2 accepted lines removed from #{path} — the 1 line left is now numbered from 1, so the numbers above no longer address it
+        OUT
+      end
+    end
+
+    # AC2, the two absences the drain side owes a pin of its own. A clause
+    # about renumbering is a claim about a rewrite; where nothing was accepted
+    # (so nothing was written) or the rewrite left the file empty (no line
+    # left for the numbers to be about), the clause has no fact to state and
+    # stays absent — the same positive-fact shape every other summary clause
+    # is held to.
+    # @intent: { entity: "specguard-ingest --drain", action: "state the renumbering", behavior: "the renumber clause is absent when nothing was accepted and when the drain emptied the file", layer: "unit" }
+    it "stays silent about renumbering when nothing was accepted and when the file was emptied" do
+      refused_only = sink(run_payload(ci_run_id: "r"))
+      # A distinct name, not a second `sink` call: `sink` always writes
+      # test_results.jsonl, so a second call would overwrite the first
+      # fixture behind the variable that still names it.
+      emptied = File.join(@dir, "emptied.jsonl")
+      File.binwrite(emptied, [JSON.generate(run_payload(ci_run_id: "a")),
+                              JSON.generate(run_payload(ci_run_id: "b"))].join("\n") + "\n")
+
+      StubIngestEndpoint.run(responses: [refusal]) do |server|
+        expect(drained_cli(server, stdout, stderr, queue: refused_only).run(["--drain", refused_only])).to eq(1)
+        expect(out).to include("delivered 0 of 1 run from #{refused_only}")
+        expect(out).not_to include("accepted line")
+      end
+
+      StubIngestEndpoint.run do |server|
+        expect(drained_cli(server, stdout, stderr, queue: emptied).run(["--drain", emptied])).to eq(0)
+        expect(out).to end_with("; 2 accepted lines removed from #{emptied}\n")
+        expect(out).not_to include("now numbered from 1")
       end
     end
 
@@ -1310,7 +1371,8 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
         expect(server.requests.map { |r| r.json["ci_run_id"] }).to eq(%w[b])
         expect(File.binread(path)).to eq("#{JSON.generate(run_payload(ci_run_id: 'a'))}\n" \
                                          "#{JSON.generate(run_payload(ci_run_id: 'c'))}\n")
-        expect(out).to include("; 1 accepted line removed from #{path}")
+        expect(out).to include("; 1 accepted line removed from #{path} — " \
+                               "the 2 lines left are now numbered from 1, so the numbers above no longer address them")
       end
     end
 
@@ -1327,7 +1389,8 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
         expect(server.requests.map { |r| r.json["ci_run_id"] }).to eq(%w[b c])
         expect(File.binread(path)).to eq("#{JSON.generate(run_payload(ci_run_id: 'a'))}\n" \
                                          "#{JSON.generate(run_payload(ci_run_id: 'c'))}\n")
-        expect(out).to include("; 1 accepted line removed from #{path}")
+        expect(out).to include("; 1 accepted line removed from #{path} — " \
+                               "the 2 lines left are now numbered from 1, so the numbers above no longer address them")
       end
     end
 
@@ -1520,6 +1583,37 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
                                 "--from-line or --lines held back")
       expect(screen).to include("a rewrite that could not complete is a 2 as well — the file is left as it was")
       expect(screen).to include("After delivering, remove from <file> exactly the lines this run accepted")
+    end
+
+    # The renumbering guarantee has to stay SCOPED. README.md once said "the
+    # numbering never shifts" with no qualifier — false the day --drain
+    # landed, since its rewrite packs the surviving lines up from the top and
+    # a report whose numbers the next command cannot use is exactly the
+    # failure a per-line report exists to prevent. The unconditional sentence
+    # must stay gone and the scoped one must stay present in BOTH places the
+    # guarantee is stated — the README's numbering paragraph and the --drain
+    # section — with the --json table's pre-drain note and the help's own
+    # clause alongside.
+    # @intent: { entity: "specguard-ingest --drain", action: "document the renumbering", behavior: "the readme and the help keep the never-shifts guarantee scoped to non-drain runs, with the pre-drain-numbers note everywhere the drain is documented", layer: "unit" }
+    it "keeps the numbering guarantee scoped in the README and the help" do
+      readme = File.read("README.md")
+
+      expect(readme).not_to include("The numbering never shifts: line 7 is line 7"),
+        "the unconditional never-shifts claim is back in README.md — it is false on the --drain path, " \
+        "whose rewrite renumbers the surviving lines"
+      expect(readme).to include("The numbering never shifts between invocations that do not drain"),
+        "the scoped never-shifts claim is gone from README.md"
+      expect(readme).to include("The removal renumbers what it leaves")
+      expect(readme.gsub(/\s+/, " "))
+        .to include("re-run `--list` to see the renumbered file, or run `--drain` again"),
+        "the README's resume guidance for a drained queue is gone"
+      expect(readme).to include("each `lines[].number` refers to the file **before** the drain")
+
+      expect(described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--help"])).to eq(0)
+      screen = out.gsub(/\s+/, " ")
+      expect(screen).to include("Removing lines renumbers what is left")
+      expect(screen).to include("describe <file> as it was read, not as the next run finds it")
+      expect(screen).to include("resume by re-running --list (or --drain) rather than reusing those numbers")
     end
   end
 

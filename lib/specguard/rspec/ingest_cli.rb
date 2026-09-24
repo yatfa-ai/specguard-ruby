@@ -294,7 +294,10 @@ module SpecGuard
         next incident's failures do not land behind runs that already landed.
         Everything else stays byte for byte and in order — refused, undelivered,
         unparseable and blank lines, and every line --from-line or --lines held
-        back. The rewrite is atomic: a temporary file in the same directory,
+        back. Removing lines renumbers what is left: the report's line numbers
+        describe <file> as it was read, not as the next run finds it, so resume
+        by re-running --list (or --drain) rather than reusing those numbers.
+        The rewrite is atomic: a temporary file in the same directory,
         renamed over the original, so a failure mid-drain leaves the file as it
         was, and bytes appended while the deliveries ran are carried into the
         rewrite. Only the replay queue is drained — another path is refused,
@@ -436,12 +439,17 @@ module SpecGuard
       # both renderers — the same one-fact-two-renderings discipline the status
       # counts and the folding groups are held to. `removed` is the count of
       # lines taken out of the file (0 when nothing was accepted, so no rewrite
-      # happened at all), and `failed` is a rewrite that could not complete:
-      # the file was left as it was, the warning is already on stderr, and the
-      # exit code is a 2, because a 0 would read as "drained" about a queue
-      # that was not. `nil` — no {Drain} at all — is the flag's absence, and
-      # both renderers render nothing for it.
-      Drain = Struct.new(:removed, :failed, keyword_init: true)
+      # happened at all), `remaining` is the count of lines the rewrite LEFT in
+      # the file — `kept + appended`, counted as lines (blank lines and the
+      # carried tail included), so a renderer can tell a queue that still holds
+      # work from one the drain emptied. `remaining` is meaningful only where a
+      # rewrite actually happened: on the no-accept and failed paths the file
+      # did not move, so it stays `nil`. `failed` is a rewrite that could not
+      # complete: the file was left as it was, the warning is already on
+      # stderr, and the exit code is a 2, because a 0 would read as "drained"
+      # about a queue that was not. `nil` — no {Drain} at all — is the flag's
+      # absence, and both renderers render nothing for it.
+      Drain = Struct.new(:removed, :remaining, :failed, keyword_init: true)
 
       # What the command line asked for. A struct rather than a bare path,
       # because `--from-line` is the second half of the same question — which
@@ -1020,8 +1028,22 @@ module SpecGuard
       # needs no clause: the accepted count in the first clause already says
       # so. The `removed: 0` of a rewrite that FAILED is carried by the stderr
       # warning and by the exit code, both louder than a clause would be.
+      #
+      # The clause's second half states the consequence the removal has for
+      # the numbers this very report just printed: a rewrite that leaves any
+      # line in the file renumbers them, because the survivors are packed up
+      # from the top — so the numbers above describe the file as it was READ,
+      # not as the next invocation will find it, and must not be reused to
+      # address it. A drain that emptied the file says nothing extra: there is
+      # no number left for the sentence to be about.
       def drain_clause(source, drained)
-        "#{drained.removed} accepted line#{'s' unless drained.removed == 1} removed from #{source.path}"
+        clause = +"#{drained.removed} accepted line#{'s' unless drained.removed == 1} removed from #{source.path}"
+        return clause unless drained.remaining&.positive?
+
+        left = drained.remaining
+        clause << " — the #{left} line#{'s' unless left == 1} left " \
+                  "#{left == 1 ? 'is' : 'are'} now numbered from 1, so the numbers above " \
+                  "no longer address #{left == 1 ? 'it' : 'them'}"
       end
 
       # Folding, stated only where it was *seen*.
@@ -1114,8 +1136,12 @@ module SpecGuard
             String.new(encoding: Encoding::BINARY)
           end
 
-        drain_write(source.path, kept + appended)
-        Drain.new(removed: accepted.length, failed: false)
+        rewritten = kept + appended
+        drain_write(source.path, rewritten)
+        # Counted as LINES, on `each_line`'s terms — the same split the
+        # numbering itself was built on — never as bytes: a blank line counts,
+        # and a queue the drain emptied reads 0 rather than 1.
+        Drain.new(removed: accepted.length, remaining: rewritten.each_line.count, failed: false)
       rescue SystemCallError, IOError => e
         # Stated, never silent — and reported without costing the delivery
         # report: stdout below is still the full per-line report, this warning
