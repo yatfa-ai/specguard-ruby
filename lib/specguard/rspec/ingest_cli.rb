@@ -218,20 +218,26 @@ module SpecGuard
       BANNER = "Usage: specguard-ingest [options] <file>"
 
       # Shown by `--help`. The second paragraph is the one that has to be there:
-      # the sink mixes failed deliveries with ordinary keyless local runs and
-      # nothing on the line tells them apart, so a developer must not be able to
+      # the local record — and any replay-queue file from before the sink split
+      # — mixes failed deliveries with ordinary keyless local runs and nothing
+      # on the line tells them apart, so a developer must not be able to
       # discover only afterwards that they pushed their laptop's history.
       DESCRIPTION = <<~TEXT.freeze
-        Re-delivers a saved run to SpecGuard's ingest endpoint. <file> is a
-        log/test_results.jsonl written by the RSpec formatter — one whole run per
-        line, byte-for-byte the body the endpoint was offered.
+        Re-delivers a saved run to SpecGuard's ingest endpoint. <file> is a file
+        the RSpec formatter wrote — one whole run per line, byte-for-byte the
+        body the endpoint was offered. The formatter writes failed deliveries
+        to the replay queue, log/test_results.jsonl, and — when no API key is
+        configured — ordinary local runs to the local development record,
+        log/test_results.local.jsonl.
 
         EVERY line in <file> is delivered — or, when you narrow it, every line
-        --from-line or --lines names. The formatter writes to this file both
-        when a delivery failed and when no API key was configured at all, and
-        the two are indistinguishable on the line, so a laptop's file is a file
-        of ordinary local runs and all of them will be sent. Nothing is
-        filtered and nothing is guessed at.
+        --from-line or --lines names. The two files were split precisely so a
+        log/test_results.jsonl written entirely by this version or later could
+        hold only genuine failed deliveries — by construction. But the local
+        record, and any file written before the split, carries no marker: a
+        laptop's file is a file of ordinary local runs mixed with genuine
+        failures, indistinguishable on the line, and all of them will be sent.
+        Nothing is filtered and nothing is guessed at.
 
         So check the file first: --list prints one row per line — branch, commit,
         ci_run_id or its absence, how many examples, how long — and delivers
@@ -662,7 +668,7 @@ module SpecGuard
       #   from, which is not a verdict about anybody's run.
       def read_source(options)
         path = options.path
-        raise UsageError, "no such file: #{path}" unless File.exist?(path)
+        raise UsageError, no_such_file_message(path) unless File.exist?(path)
         raise UsageError, "not a file: #{path}" unless File.file?(path)
 
         lines = []
@@ -705,6 +711,28 @@ module SpecGuard
                    selector: options.line_set ? :line_set : :from_line)
       rescue SystemCallError, IOError => e
         raise UsageError, "could not read #{path}: #{e.message}"
+      end
+
+      # The `no such file` refusal, with one conditional clause: when the
+      # missing path IS the configured replay queue and the configured local
+      # record exists, name the record. A keyless developer is pointed at
+      # `log/test_results.jsonl` by the help while their run wrote the other
+      # file, and this is the one moment the tool can say so. The guard is the
+      # conjunction — equality, not "the path looks like a queue", and an
+      # existence check, not "the record is merely configured" — so an ordinary
+      # typo keeps the plain message byte-for-byte, and the clause cannot fire
+      # on a relative default that happens to resolve against the working
+      # directory.
+      def no_such_file_message(path)
+        configuration = Configuration.new(env: @env)
+        local = configuration.local_output_path
+        if path == configuration.output_path && File.exist?(local)
+          "no such file: #{path} — the replay queue was never written, but the " \
+            "local record #{local} does exist (what the formatter writes when " \
+            "no API key is configured)"
+        else
+          "no such file: #{path}"
+        end
       end
 
       # The whole of the selection, and the only place it is decided. `--lines`

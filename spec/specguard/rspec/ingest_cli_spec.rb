@@ -348,6 +348,69 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
       end
     end
 
+    # SPGD-1436: the refusal is the one moment a keyless developer can be told
+    # where their run actually went — the help points them at the replay queue
+    # while their keyless run wrote the local record beside it. The clause is
+    # guarded on the conjunction — the missing path IS the configured replay
+    # queue AND the configured local record EXISTS — so an ordinary typo, or a
+    # missing pair, keeps the plain message byte-for-byte.
+    context "when the missing file is the configured replay queue" do
+      let(:endpoint) { "https://specguard.example.com" }
+      let(:queue) { File.join(@dir, "queue.jsonl") }
+      let(:local) { File.join(@dir, "local.jsonl") }
+
+      let(:env) do
+        { "SPECGUARD_ENDPOINT" => endpoint, "SPECGUARD_API_KEY" => api_key,
+          "SPECGUARD_OUTPUT_PATH" => queue, "SPECGUARD_LOCAL_OUTPUT_PATH" => local }
+      end
+
+      def local_record
+        File.write(local, "#{JSON.generate(run_payload)}\n")
+      end
+
+      # @intent: { entity: "specguard-ingest refusal", action: "name the keyless sink", behavior: "a missing replay queue with a local record present names the record", layer: "unit" }
+      it "names the local record in the refusal when it exists" do
+        local_record
+
+        expect(cli.run([queue])).to eq(2)
+        expect(err).to eq(
+          "specguard-ingest: error: no such file: #{queue} — the replay queue was never " \
+          "written, but the local record #{local} does exist (what the formatter writes " \
+          "when no API key is configured)\n"
+        )
+      end
+
+      # The same clause through the arm that exists for exactly this developer:
+      # a keyless `--list`, where no transport is ever built.
+      # @intent: { entity: "specguard-ingest refusal", action: "name the keyless sink", behavior: "the keyless --list arm names the local record too", layer: "unit" }
+      it "names the local record under --list, with no credentials configured" do
+        local_record
+        keyless = described_class.new(stdout: stdout, stderr: stderr,
+                                      env: { "SPECGUARD_OUTPUT_PATH" => queue,
+                                             "SPECGUARD_LOCAL_OUTPUT_PATH" => local })
+
+        expect(keyless.run(["--list", queue])).to eq(2)
+        expect(err).to include("the local record #{local} does exist")
+      end
+
+      # @intent: { entity: "specguard-ingest refusal", action: "keep the plain refusal", behavior: "a missing pair keeps the message byte-for-byte", layer: "unit" }
+      it "keeps the plain message byte-for-byte when the local record does not exist" do
+        expect(cli.run([queue])).to eq(2)
+        expect(err).to eq("specguard-ingest: error: no such file: #{queue}\n")
+      end
+
+      # The equality term, pinned on its own: a local record merely existing is
+      # not enough — the missing path must BE the configured queue, or every
+      # typo would be redirected at whichever file happens to be configured.
+      # @intent: { entity: "specguard-ingest refusal", action: "keep the plain refusal", behavior: "a missing path that is not the replay queue keeps the plain message even with a local record present", layer: "unit" }
+      it "keeps the plain message when the missing path is not the replay queue, even with a local record present" do
+        local_record
+
+        expect(cli.run([File.join(@dir, "gone.jsonl")])).to eq(2)
+        expect(err).to eq("specguard-ingest: error: no such file: #{File.join(@dir, 'gone.jsonl')}\n")
+      end
+    end
+
     context "when a line cannot be parsed" do
       # @intent: { entity: "specguard-ingest exit contract", action: "rank the codes", behavior: "a tool failure outranks a refusal waiting on the same file", layer: "unit" }
       it "exits 2, and 2 outranks a refusal on the same file" do
@@ -1986,15 +2049,42 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
     end
 
     # The second constraint the ticket found, discharged where a user meets it.
-    # The sink mixes failed deliveries with ordinary keyless local runs and
-    # nothing on the line tells them apart, so a developer must be able to learn
-    # BEFORE running this that their laptop's whole history will be sent.
+    # The hazard the help must state BEFORE running this: every line is
+    # delivered, and the local record — or any replay-queue file from before
+    # the sink split — mixes ordinary keyless local runs with genuine failures
+    # nothing on the line tells apart.
+    #
+    # RE-AIMED for SPGD-1436: the second assertion quoted the stale conflation
+    # sentence ("when no API key was configured at all") this ticket corrects.
+    # Pinning a fragment of a removed sentence would hold the help to its own
+    # defect, so the pin now holds the corrected sentence — the mixing claim,
+    # scoped to the files it is actually true of. That also makes this example
+    # one of the two that fail on the pre-fix text (the negative-first receipt).
     # @intent: { entity: "specguard-ingest help", action: "warn about delivery", behavior: "the help warns that every line is delivered, failures or not", layer: "unit" }
     it "warns in the help that every line is delivered, failures or not" do
       cli.run(["--help"])
+      screen = out.gsub(/\s+/, " ")
 
-      expect(out).to include("EVERY line in <file> is delivered")
-      expect(out).to include("when no API key was configured at all")
+      expect(screen).to include("EVERY line in <file> is delivered")
+      expect(screen).to include("a file of ordinary local runs mixed with genuine failures")
+    end
+
+    # NEGATIVE-FIRST for SPGD-1436: the tokens the previous example asserts are
+    # the hazard, which the unfixed help already carried — so the correction is
+    # pinned by the clauses that did not exist before it: both sinks named with
+    # the keyless one identified, and the by-construction claim the README
+    # settled on for a queue file this version wrote. Measured at 80eac2a,
+    # `test_results.local` had zero hits in ingest_cli.rb, so every assertion
+    # here fails on the pre-fix text.
+    # @intent: { entity: "specguard-ingest help", action: "name the sinks", behavior: "the help names both sinks, says which one a keyless run writes, and corrects the conflation claim", layer: "unit" }
+    it "names both sinks, identifies the keyless one, and states the by-construction claim" do
+      cli.run(["--help"])
+      screen = out.gsub(/\s+/, " ")
+
+      expect(screen).to include("the replay queue, log/test_results.jsonl")
+      expect(screen).to include("the local development record, log/test_results.local.jsonl")
+      expect(screen).to include("when no API key is configured")
+      expect(screen).to include("hold only genuine failed deliveries")
     end
 
     # The hazard above was stated with no remedy for as long as there was none.
