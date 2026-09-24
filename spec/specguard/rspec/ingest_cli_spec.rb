@@ -1526,19 +1526,21 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
 
     # The swap must not reset the file's mode: `File.binwrite` creates its
     # temporary under the umask's defaults, so without an explicit chmod a
-    # queue restricted to 0640 comes back 0644 as a fresh inode. 0640 rather
-    # than 0600 so the example cannot pass by accident: 0600 is exactly the
-    # default under umask 077, where this would pass without the fix.
+    # queue restricted to 0750 comes back as a fresh inode holding whatever
+    # the umask left of the default 0666. 0750 rather than a plainer mode so
+    # the example cannot pass by accident: a umask can only clear bits from
+    # 0666, so no umask ever yields an execute bit, and the assertion fails
+    # unless the code under test really chmods.
     # @intent: { entity: "specguard-ingest --drain", action: "replace atomically", behavior: "the rewritten queue keeps the file mode it had before the swap", layer: "unit" }
     it "keeps the queue file's mode through the atomic swap" do
       path = mixed_sink
-      File.chmod(0o640, path)
+      File.chmod(0o750, path)
 
       StubIngestEndpoint.run(responses: [{}, refusal, outage]) do |server|
         expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(2)
       end
 
-      expect(File.stat(path).mode & 0o7777).to eq(0o640)
+      expect(File.stat(path).mode & 0o7777).to eq(0o750)
       expect(File.binread(path)).to eq(mixed_kept)
     end
 
@@ -1547,21 +1549,43 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
     # itself with a regular file — and leave the real target, the file the
     # formatter and the next drain keep working on, holding every line just
     # accepted, which are then sent again. The rewrite must land on the
-    # resolved target instead, with the link itself left in place.
-    # @intent: { entity: "specguard-ingest --drain", action: "replace atomically", behavior: "draining a symlinked queue rewrites the link's target byte for byte and leaves the link itself in place", layer: "unit" }
+    # resolved target instead, with the link itself left in place. The target
+    # lives in a second directory so the example can see which directory the
+    # temporary was built in, and the swap is observed through the rename
+    # itself: a temp file written next to the link can still rename onto the
+    # target successfully across directories, so only the observed `from`
+    # pins the temp to the target's directory. The target starts chmod'ed
+    # 0750 so a stat-vs-lstat mix-up (the link's own mode) shows in the mode
+    # the target keeps.
+    # @intent: { entity: "specguard-ingest --drain", action: "replace atomically", behavior: "draining a symlinked queue rewrites the link's target byte for byte, through a rename observed to come from the target's own directory, keeps the target's mode, and leaves the link itself in place", layer: "unit" }
     it "rewrites a symlinked queue's target, leaving the link itself in place" do
-      target_path = File.join(@dir, "target.jsonl")
-      File.binwrite(target_path, mixed_original)
-      path = File.join(@dir, "queue-link.jsonl")
-      File.symlink(target_path, path)
+      Dir.mktmpdir do |target_dir|
+        target_path = File.join(target_dir, "target.jsonl")
+        File.binwrite(target_path, mixed_original)
+        File.chmod(0o750, target_path)
+        path = File.join(@dir, "queue-link.jsonl")
+        File.symlink(target_path, path)
+        renames = []
 
-      StubIngestEndpoint.run(responses: [{}, refusal, outage]) do |server|
-        expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(2)
+        StubIngestEndpoint.run(responses: [{}, refusal, outage]) do |server|
+          allow(File).to receive(:rename).and_wrap_original do |rename, src, dst|
+            renames << [src, dst]
+            rename.call(src, dst)
+          end
+
+          expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(2)
+        end
+
+        expect(File).to have_received(:rename)
+        target_real = File.realpath(target_path)
+        src, dst = renames.find { |from, to| to == target_real }
+        expect(dst).to eq(target_real)
+        expect(File.dirname(src)).to eq(File.dirname(target_real))
+        expect(File.symlink?(path)).to be(true)
+        expect(File.readlink(path)).to eq(target_path)
+        expect(File.stat(target_path).mode & 0o7777).to eq(0o750)
+        expect(File.binread(target_path)).to eq(mixed_kept)
       end
-
-      expect(File.symlink?(path)).to be(true)
-      expect(File.readlink(path)).to eq(target_path)
-      expect(File.binread(target_path)).to eq(mixed_kept)
     end
 
     # --json carries the same fact as data, and carries it ONLY under the flag:
