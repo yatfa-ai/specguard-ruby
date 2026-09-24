@@ -877,7 +877,9 @@ command draws. Everything else stays **byte for byte, in the file's order**:
 
 The rewrite is **atomic**: a temporary file in the same directory, renamed over
 the original, so a failure mid-drain leaves the file exactly as it was — and
-nothing is written at all unless something was actually accepted.
+nothing is written at all unless something was actually accepted. The swap
+also keeps the queue file's permissions, and when the queue path is a symlink
+it rewrites the link's target rather than replacing the link.
 
 **The removal renumbers what it leaves.** The rewrite keeps the surviving lines
 byte for byte and in order, and packing them up from the top gives them new
