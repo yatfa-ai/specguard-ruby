@@ -773,6 +773,101 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
     end
   end
 
+  # SPGD-1429, end to end. The block above pins SPGD-1417's half of the
+  # pipeline — the lookup's read root, bound at construction — and it passes
+  # only because its control row relativizes BEFORE the move, binding
+  # rspec-core's regex at the construction directory: the two roots agree by
+  # luck. The `SHALLOWER` direction is the one that breaks that luck. A suite
+  # whose first file chdirs to an ANCESTOR at load time — before anything has
+  # relativized, and therefore before the regex's first read — makes the two
+  # roots disagree: rows relativize against the moved-to ancestor
+  # (`<root>/sample_spec.rb` reads as `<tmpdir-name>/sample_spec.rb`) while
+  # the lookup resolves those spellings against the construction directory,
+  # doubling the segment into `<root>/<tmpdir-name>/...`, which no file
+  # answers. Every readable, correctly annotated spec in the run ships
+  # `unannotated` / `intent: null` — byte-for-byte what a genuinely
+  # unannotated row reports — with no warning, no degraded flag and an
+  # unchanged exit code.
+  #
+  # The ordering is the discriminator, not the chdir. This whole file's
+  # deeper-chdir block leans on a row recorded before the move; this suite
+  # has no such row. The chdir is the FIRST statement of the FIRST file
+  # loaded (`sample_spec.rb` is always the harness's first target), so the
+  # run's first relativization cannot land before the move — a pin that
+  # recorded any row first, or that moved deeper, is green on the unfixed
+  # code. The `after(:all)` restores the cwd before the child writes its
+  # relative sink path, for the same reason the block above restores its own.
+  #
+  # The control arm runs an identical suite that never moves: construction
+  # and the first relativization happen in the same directory, so both roots
+  # bind there naturally. It exists so a rig that degraded to "neither arm
+  # annotates" fails rather than passing on equality — broken fixtures or a
+  # broken stub validator would otherwise make the moved arm's assertion
+  # vacuous.
+  describe "a suite whose first lookup happens after the suite moves to a shallower directory (SPGD-1429)" do
+    def annotated_shallower_mover
+      <<~RUBY
+        ROOT = Dir.pwd
+        Dir.chdir(File.dirname(ROOT))
+
+        RSpec.describe "orders" do
+          after(:all) { Dir.chdir(ROOT) }
+
+          # @intent: { entity: "Order", action: "checkout", behavior: "returns 402 payment required on expired card", layer: "request" }
+          it "totals the basket" do
+            expect(1).to eq(1)
+          end
+        end
+      RUBY
+    end
+
+    def annotated_no_move
+      <<~RUBY
+        RSpec.describe "orders" do
+          # @intent: { entity: "Order", action: "checkout", behavior: "returns 402 payment required on expired card", layer: "request" }
+          it "totals the basket" do
+            expect(1).to eq(1)
+          end
+        end
+      RUBY
+    end
+
+    before(:context) do
+      @moved = run_rspec(annotated_shallower_mover)
+      @control = run_rspec(annotated_no_move)
+    end
+
+    let(:moved) { @moved }
+    let(:control) { @control }
+
+    def row_for(run, path)
+      run.payload["specs"].find { |spec| spec["file_path"] == path }
+    end
+
+    # @intent: { entity: "RSpecFormatter child run", action: "annotate after a shallower move", behavior: "a readable annotated suite still annotates when its first lookup happens after the suite moved to a shallower directory, with the file register spelled against the construction root", layer: "integration" }
+    it "still annotates the suite whose first lookup lands after the move" do
+      expect(moved.exit_status).to eq(0)
+
+      moved_row = row_for(moved, "sample_spec.rb")
+      expect(moved_row).not_to be_nil
+      expect(moved_row["status"]).to eq("annotated")
+      expect(moved_row["intent"]).to include("entity" => "Order", "action" => "checkout")
+    end
+
+    # The control, asserted as its own example rather than implied by the one
+    # above: with broken fixtures or a broken stub, both runs would read
+    # unannotated and the example above would say nothing about the roots.
+    # @intent: { entity: "RSpecFormatter child run", action: "annotate without a move", behavior: "the identical suite that never changes directory keeps annotating, so the sibling assertion is about the two roots and not about broken fixtures", layer: "integration" }
+    it "keeps annotating the identical suite that never moves" do
+      expect(control.exit_status).to eq(0)
+
+      control_row = row_for(control, "sample_spec.rb")
+      expect(control_row).not_to be_nil
+      expect(control_row["status"]).to eq("annotated")
+      expect(control_row["intent"]).to include("entity" => "Order", "action" => "checkout")
+    end
+  end
+
   # Criterion 1, under the wiring that can actually fail it.
   #
   # The block above hands its child `--format progress` on the command line, so
