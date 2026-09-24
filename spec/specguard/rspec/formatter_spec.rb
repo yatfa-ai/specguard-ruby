@@ -1766,6 +1766,32 @@ RSpec.describe SpecGuard::RSpecFormatter do
       expect(errors.string).to include("IOError")
     end
 
+    # The README says the same thing about the keyless arm, and this is what
+    # makes that checkable — validator_backend_spec.rb's README seal is the
+    # template, for the reason its own comment gives: a sample block updated in
+    # HALF reads as documentation and is worse than a sample nobody touched, so
+    # the documented line below is EXTRACTED from a real run rather than
+    # typed. The IOError arm is the driver on purpose: its exception carries no
+    # path at all, so the path in the extracted line can only be the
+    # configured one — which is exactly the distinction the documented sample
+    # exists to show. The run's tmpdir path is substituted for the default the
+    # README shows, and the README side is whitespace-collapsed because it
+    # wraps sample blocks the way it wraps every sample block.
+    # @intent: { entity: "RSpecFormatter", action: "document the clauses", behavior: "the keyless sink's failure line is documented in the readme in the words the code emits", layer: "unit" }
+    it "documents the keyless sink's failure line in the README, in the words the code emits" do
+      allow(File).to receive(:open).and_call_original
+      allow(File).to receive(:open).with(local_sink, "a").and_raise(IOError, "closed stream")
+
+      formatter.close(nil)
+
+      emitted = errors.string.lines.find { |line| line.include?("could not write telemetry") }
+      expect(emitted).not_to be_nil, "no keyless-sink failure line was emitted to extract"
+      documented = emitted.strip.sub(local_sink, "log/test_results.local.jsonl")
+
+      expect(File.read("README.md").gsub(/\s+/, " ")).to include(documented),
+        "README.md does not carry the keyless-sink failure line this gem emits: #{documented.inspect}"
+    end
+
     # A bare `rescue` catches StandardError only. An autoload or a mixin
     # blowing up raises ScriptError, and would sail straight past it.
     # @intent: { entity: "RSpecFormatter", action: "never fail the run", behavior: "a ScriptError, which a bare rescue misses, is swallowed too", layer: "unit" }
