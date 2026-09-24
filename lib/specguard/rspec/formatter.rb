@@ -666,13 +666,15 @@ module SpecGuard
     # Sink selection, and the fallback that keeps a failed delivery from being
     # a silent one.
     #
-    # Called from inside {#never_fail_the_run}, so nothing below has to guard
-    # itself against raising — the keyless {#append_local}'s failure modes
-    # (unwritable `log/`, full disk) are covered there. The fallback {#append}
-    # is the one exception, and deliberately so: it catches those same modes
-    # itself and hands the outcome back, because the one line {#fall_back} is
-    # spending has to report whether the queue took the run rather than promise
-    # it (SPGD-1413). Nothing raises out of either way.
+    # Called from inside {#never_fail_the_run}, so a raise below it cannot
+    # fail the run — but neither arm leaves its failure to that generic
+    # envelope, because each spends the run's one warning on a line that has
+    # to say what actually happened. {#append} catches the sink's failure
+    # modes itself and hands the outcome back, so the one line {#fall_back} is
+    # spending can report whether the queue took the run rather than promise
+    # it (SPGD-1413); the keyless {#append_local} does the same and names the
+    # configured sink path in the line it emits, the way the Minitest twin
+    # does (SPGD-1400). Nothing raises out of either way.
     #
     # == Why a failure writes the file rather than shrugging
     #
@@ -1078,8 +1080,23 @@ module SpecGuard
     # record deliberately kept apart from {#append}'s replay queue so that
     # `specguard-ingest log/test_results.jsonl` re-delivers only genuine
     # failed deliveries. See {Configuration#local_output_path}.
+    #
+    # Its failure is its own line rather than {#never_fail_the_run}'s generic
+    # substitute: the path is knowable here — read once into a local, for the
+    # same reason {#append} takes one — and the Minitest twin names it on the
+    # same input (SPGD-1400), as does this file's delivery arm through
+    # {#sink_clause} (SPGD-1413). The write goes through {#append} so the
+    # exception comes back as a value to compose the line from; left to raise,
+    # it would fall through to {#never_fail_the_run} and spend the run's one
+    # warning on the one sentence this exists to replace. `Interrupt` stays
+    # outside, as everywhere else in this file.
     def append_local(data)
-      append_to(data, SpecGuard::RSpec.configuration.local_output_path)
+      path = SpecGuard::RSpec.configuration.local_output_path
+      error = append(data, path)
+      return if error.nil?
+
+      emit_warning("SpecGuard: could not write telemetry to #{path} " \
+                   "(#{error.class}: #{error.message}). The test run is unaffected.")
     end
 
     def append_to(data, path)
