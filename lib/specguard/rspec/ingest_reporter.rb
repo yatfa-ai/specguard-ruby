@@ -113,13 +113,17 @@ module SpecGuard
       #   {IngestCLI} for both renderers
       # @param foldings [Array<IngestCLI::Folding>] the folding observations,
       #   grouped once for both renderers
+      # @param drained [IngestCLI::Drain, nil] what `--drain` removed, or nil
+      #   when the flag was absent — the key is then absent from `summary`,
+      #   which is the whole of the flag being opt-in
       # @return [String] one JSON document, without a trailing newline
-      def self.render_delivery(source:, results:, counts:, foldings:)
+      def self.render_delivery(source:, results:, counts:, foldings:, drained: nil)
         document(
           mode: MODE_DELIVER,
           source: source,
           lines: results.map { |result| delivered(result) },
-          summary: summary(source, lines: results.length, counts: counts, attempted: attempted(counts)),
+          summary: summary(source, lines: results.length, counts: counts, attempted: attempted(counts),
+                           drained: drained),
           foldings: foldings.map { |folding| folded(folding) }
         )
       end
@@ -177,8 +181,15 @@ module SpecGuard
       # render the identical document. It is `null` rather than `[]` where the
       # selector was fully satisfied, on {#selector}'s terms: a fact that does
       # not apply is absent, never a fabricated empty.
-      def self.summary(source, lines:, counts:, attempted:)
-        {
+      #
+      # `drained` is the `--drain` count, and it is present exactly when the
+      # flag was given — `0` where the flag asked and nothing was accepted, so
+      # a consumer that asked for the drain can always read its outcome here,
+      # and a document without the key is a run that never asked. The listing
+      # never carries it: `--drain --list` is refused before either renderer
+      # runs.
+      def self.summary(source, lines:, counts:, attempted:, drained: nil)
+        summary = {
           "lines" => lines,
           "attempted" => attempted,
           "accepted" => counts.fetch(:accepted, 0),
@@ -190,6 +201,8 @@ module SpecGuard
           "absent" => absent(source),
           "selector" => selector(source)
         }
+        summary["drained"] = drained.removed if drained
+        summary
       end
 
       # The typed line numbers the file does not have, in the shorthand they
