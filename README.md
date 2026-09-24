@@ -470,7 +470,21 @@ is written to `log/test_results.local.jsonl` — the local development record,
 kept apart from the replay queue — so local development needs no opt-out, and a
 fork with no secret configured behaves like a laptop rather than like a broken
 build. The local file's name is configurable via `SPECGUARD_LOCAL_OUTPUT_PATH`
-(or `SpecGuard::RSpec.configure { |c| c.local_output_path = ... }`).
+(or `SpecGuard::RSpec.configure { |c| c.local_output_path = ... }`). The write
+itself is silent when it succeeds — the ordinary case on any machine that can
+create `log/` — and it usually does.
+
+**When the local file cannot be written, the run says so instead.** A read-only
+mount, a full disk, a regular file sitting where the directory should be: both
+Ruby clients print **one** line to stderr naming the **configured** path and the
+underlying error, whatever it is, and the test run is unaffected. The path in
+the line is the client's own — the one your configuration set — and it has to
+be, because a failure like a closed stream carries no path of its own:
+
+```
+SpecGuard: could not write telemetry to log/test_results.local.jsonl
+(IOError: closed stream). The test run is unaffected.
+```
 
 **A failed delivery is never silent, and the run is kept whenever it can be.**
 If the endpoint refuses the run (a `401` from a rotated key, a `400`, a `500`)
