@@ -162,6 +162,43 @@ module SpecGuard
     # convention and the shell's; this file adopts it on purpose and pins it in
     # the spec, so it is a decision rather than a default nobody looked at.
     #
+    # == `--drain`, the follow-through, and why it removes only what it saw
+    #
+    # A successful replay used to leave the queue byte-identical: this file had
+    # no write, rename or truncate path, so the next incident's failures
+    # appended behind runs that had already landed, and the README's retry
+    # gesture — re-running the command — re-sent every one of them. A line with
+    # a `ci_run_id` folds onto the run it already made, so re-sending it is
+    # harmless; a line without one has nothing to fold onto and becomes a
+    # second row on the platform. `--drain` is the opt-in answer: after the
+    # deliveries, exactly the lines answered 202 **in this invocation** are
+    # removed from the file.
+    #
+    # Only those. The removal is keyed to what was *observed*, never to what
+    # was inferred — the same line this file draws against guessing which lines
+    # were failures. A refused line is refused every time it is offered, an
+    # undelivered one never arrived, an unparseable one was never a run, a
+    # blank one was never anything, and a line a selector held back was never
+    # sent — so all of them stay, byte for byte, in the file's order. The queue
+    # is failure-only by construction, which is what makes removing accepted
+    # lines coherent here in a way it would not be on the mixed local record:
+    # draining a file of ordinary laptop runs would delete runs that were
+    # never failures. That is the second guard — the drain refuses any path
+    # that is not the configured replay queue, compared exactly as
+    # {#no_such_file_message} compares, and it refuses `--list` too, since a
+    # listing delivers nothing for it to drain.
+    #
+    # The rewrite is atomic: a temporary file in the same directory, renamed
+    # over the original, so a failure mid-drain leaves the file as it was —
+    # and the file is not touched at all unless something was accepted. Bytes
+    # appended while the deliveries ran (the formatter appends to the queue
+    # with no lock) are carried into the rewrite; the window that remains
+    # between the final read and the rename is disclosed at {#drain_source},
+    # not claimed closed. A drain that cannot complete is stated, never
+    # silent: the deliveries are still reported in full, the warning names the
+    # file, and the run exits 2, because a 0 would read as "drained" about a
+    # queue that was not.
+    #
     # == `--list`, which is what makes "check the file first" an instruction
     #
     # Having refused to guess *for* the user, this command owes them what they
@@ -252,6 +289,19 @@ module SpecGuard
         that same numbering, instead of re-sending all of it. Both narrow the
         same file, so give one or the other and never both.
 
+        --drain is the follow-through, and it is opt-in: after the deliveries,
+        the lines this invocation got a 202 for are removed from <file>, so the
+        next incident's failures do not land behind runs that already landed.
+        Everything else stays byte for byte and in order — refused, undelivered,
+        unparseable and blank lines, and every line --from-line or --lines held
+        back. The rewrite is atomic: a temporary file in the same directory,
+        renamed over the original, so a failure mid-drain leaves the file as it
+        was, and bytes appended while the deliveries ran are carried into the
+        rewrite. Only the replay queue is drained — another path is refused,
+        because the local record is a development record, not a queue — and
+        --drain with --list is refused too, since a listing delivers nothing
+        for it to drain.
+
         Reads SPECGUARD_ENDPOINT, SPECGUARD_API_KEY and SPECGUARD_TIMEOUT.
 
         --json replaces the human report with one JSON document on stdout, in
@@ -270,10 +320,11 @@ module SpecGuard
              an unreadable file, an unparseable line, a delivery that never
              reached the endpoint, or one the endpoint answered without ever
              reading it (401, 404, 429, 5xx — nothing was stored, so none of
-             them is a verdict about your run). With --list the only reachable
-             2s are a bad flag and a file that cannot be read: listing needs no
-             credentials, and an unparseable line becomes a row in the listing
-             rather than an exit code
+             them is a verdict about your run). With --drain, a rewrite that
+             could not complete is a 2 as well — the file is left as it was.
+             With --list the only reachable 2s are a bad flag and a file that
+             cannot be read: listing needs no credentials, and an unparseable
+             line becomes a row in the listing rather than an exit code
       TEXT
 
       # Every line in the file was accepted by the endpoint — including the
@@ -366,8 +417,31 @@ module SpecGuard
       # selector was fully satisfied, and empty under `--from-line`, whose
       # past-the-end case is already a suffix that selected nothing.
       #
+      # `raw` and `read_bytes` are the drain's inputs, captured by
+      # {#read_source} and by nothing else: the file's exact bytes as of the
+      # read, and that read's length in bytes. The rebuild keeps `raw`'s lines
+      # minus the accepted numbers — which is what makes "byte for byte" a
+      # property of the rewrite rather than a hope — and `read_bytes` is where
+      # the tail starts: anything appended past it while the deliveries ran is
+      # carried into the rewrite verbatim. They are members of {Source} rather
+      # than a second read inside {#drain_source} because the length that
+      # matters is the one the numbered lines were counted against; a fresh
+      # read at drain time would answer a different read.
+      #
       # @return [Array<String>] `absent`, each entry a number or an `N-M` range
-      Source = Struct.new(:path, :lines, :blank, :skipped, :absent, :selector, keyword_init: true)
+      Source = Struct.new(:path, :lines, :blank, :skipped, :absent, :selector,
+                          :raw, :read_bytes, keyword_init: true)
+
+      # What `--drain` did, decided once in {#drain_source} and rendered by
+      # both renderers — the same one-fact-two-renderings discipline the status
+      # counts and the folding groups are held to. `removed` is the count of
+      # lines taken out of the file (0 when nothing was accepted, so no rewrite
+      # happened at all), and `failed` is a rewrite that could not complete:
+      # the file was left as it was, the warning is already on stderr, and the
+      # exit code is a 2, because a 0 would read as "drained" about a queue
+      # that was not. `nil` — no {Drain} at all — is the flag's absence, and
+      # both renderers render nothing for it.
+      Drain = Struct.new(:removed, :failed, keyword_init: true)
 
       # What the command line asked for. A struct rather than a bare path,
       # because `--from-line` is the second half of the same question — which
@@ -377,12 +451,15 @@ module SpecGuard
       # starting point, and the two are mutually exclusive (see the class
       # comment). `list` is the third half: whether those lines are to be
       # *shown* or *sent*. `json` is orthogonal to all three — it chooses the
-      # renderer, never the set and never the verdict.
+      # renderer, never the set and never the verdict. `drain` is the one
+      # member about what happens *after* the sending: whether the lines this
+      # invocation got a 202 for are to be removed from <file> once the
+      # deliveries are done.
       #
       # `line_set` is an Array of Ranges rather than an expanded Array of
       # Integers, so `--lines 1-90000000` costs nothing to hold. `nil` means the
       # flag was not given and `from_line` is the selector.
-      Options = Struct.new(:path, :from_line, :list, :line_set, :json, keyword_init: true)
+      Options = Struct.new(:path, :from_line, :list, :line_set, :json, :drain, keyword_init: true)
 
       # One entry of a `--lines` spec: `12` or `12-15`, and nothing else. No
       # sign, no open end, no whitespace inside — {#parse_line_set} strips each
@@ -431,9 +508,14 @@ module SpecGuard
 
         source = read_source(options)
         results = source.lines.map { |number, text| deliver_line(number, text, transport) }
+        # After the deliveries, before the report — the only position where the
+        # summary can state what the drain removed. `drained` is nil without
+        # the flag, and both renderers render nothing for it, which is the
+        # whole of the flag being opt-in.
+        drained = options.drain ? drain_source(source, results) : nil
 
-        report(source, results, json: options.json)
-        exit_code(results)
+        report(source, results, json: options.json, drained: drained)
+        exit_code(results, drained: drained)
       rescue Errno::EPIPE
         # The report's reader stopped listening — `| head`, a quitting pager,
         # a CI log tailer. The deliveries happened and the per-line verdicts
@@ -442,7 +524,7 @@ module SpecGuard
         # nil on the `--list` path, which builds none, and when the pipe
         # closed before any delivery was made; then {EXIT_OK} stands. See
         # the class comment.
-        results ? exit_code(results) : EXIT_OK
+        results ? exit_code(results, drained: drained) : EXIT_OK
       rescue UsageError => e
         @stderr.puts "specguard-ingest: error: #{e.message}"
         EXIT_MISUSE
@@ -461,7 +543,14 @@ module SpecGuard
       # reached the endpoint leaves the job unfinished, and reporting that as
       # "your content was refused" is the exact confusion the contract exists to
       # prevent.
-      def exit_code(results)
+      #
+      # `drained` joins the dominance list ahead of the content verdicts, on
+      # the same grounds: a drain that could not complete left the queue
+      # holding everything it held before, accepted lines included, and
+      # reporting that as "your content was refused" (or as a clean 0) would
+      # both be the wrong shout.
+      def exit_code(results, drained: nil)
+        return EXIT_MISUSE if drained&.failed
         return EXIT_MISUSE if results.any? { |result| %i[undelivered unparseable].include?(result.status) }
         return EXIT_REFUSED if results.any? { |result| result.status == :refused }
 
@@ -706,9 +795,24 @@ module SpecGuard
           end
         end
 
+        # The drain's capture, taken AFTER the line walk and for that reason:
+        # read first, length second means `read_bytes` covers everything the
+        # numbered lines were counted against, even where an append landed
+        # between the two reads — such bytes are in `raw` (as extra tail lines
+        # numbered past the delivered set, kept by any rewrite) and past
+        # `read_bytes` is genuinely only what arrived after this method
+        # returned. Reading the bytes first would invert that: a line appended
+        # in the gap could then be delivered AND carried back by the tail.
+        #
+        # Binary on purpose — this is the file's bytes, not its characters.
+        # The default path never looks at either member; the whole capture is
+        # the drain's, and its cost on the default path is one read.
+        raw = File.binread(path)
+
         Source.new(path: path, lines: lines, blank: blank, skipped: skipped,
                    absent: absent_entries(options, length),
-                   selector: options.line_set ? :line_set : :from_line)
+                   selector: options.line_set ? :line_set : :from_line,
+                   raw: raw, read_bytes: raw.bytesize)
       rescue SystemCallError, IOError => e
         raise UsageError, "could not read #{path}: #{e.message}"
       end
@@ -793,7 +897,7 @@ module SpecGuard
       # renderers can disagree about how much of a file it delivered is worse
       # than one that only prints prose: the disagreement is unfalsifiable from
       # outside the process.
-      def report(source, results, json:)
+      def report(source, results, json:, drained: nil)
         if results.empty?
           @stderr.puts "specguard-ingest: warning: #{source.path} holds no runs to deliver#{empty_detail(source)}"
           return unless json
@@ -804,12 +908,12 @@ module SpecGuard
 
         if json
           @stdout.puts IngestReporter.render_delivery(source: source, results: results, counts: counts,
-                                                      foldings: foldings)
+                                                      foldings: foldings, drained: drained)
           return
         end
 
         results.each { |result| @stdout.puts line_report(result) }
-        @stdout.puts summary_line(source, results, counts)
+        @stdout.puts summary_line(source, results, counts, drained)
         foldings.each { |folding| @stdout.puts folding_observation(folding) }
       end
 
@@ -894,7 +998,7 @@ module SpecGuard
       # accepted count is over the total rather than on its own, and every other
       # outcome gets a clause of its own instead of being folded into a
       # remainder the reader has to compute.
-      def summary_line(source, results, counts)
+      def summary_line(source, results, counts, drained)
         parts = ["specguard-ingest: delivered #{counts.fetch(:accepted, 0)} of " \
                  "#{results.length} run#{'s' unless results.length == 1} from #{source.path}"]
 
@@ -904,8 +1008,20 @@ module SpecGuard
         parts << blank_clause(source) if source.blank.positive?
         parts << skipped_clause(source) if source.skipped.positive?
         parts << absent_clause(source) if source.absent.any?
+        parts << drain_clause(source, drained) if drained&.removed&.positive?
 
         parts.join("; ")
+      end
+
+      # The drain's clause, present exactly when lines were removed and never
+      # otherwise — the summary's established shape, where a clause names a
+      # fact that is positive rather than padding the line with zeroes. The
+      # `removed: 0` of a rewrite that did not happen (nothing was accepted)
+      # needs no clause: the accepted count in the first clause already says
+      # so. The `removed: 0` of a rewrite that FAILED is carried by the stderr
+      # warning and by the exit code, both louder than a clause would be.
+      def drain_clause(source, drained)
+        "#{drained.removed} accepted line#{'s' unless drained.removed == 1} removed from #{source.path}"
       end
 
       # Folding, stated only where it was *seen*.
@@ -939,6 +1055,92 @@ module SpecGuard
           "came back with test_run_id #{folding.test_run_id} — the endpoint folded them onto one run"
       end
 
+      # --drain: remove from <file> exactly the lines this invocation got a 202
+      # for, atomically, carrying anything appended while the deliveries ran.
+      #
+      # == What is removed, and what is not
+      #
+      # Only `:accepted` results, by their own file-line numbers — the removal
+      # is keyed to what the endpoint answered this run, never to a guess about
+      # which lines were failures. Everything else {Source#raw} holds is kept:
+      # refused, undelivered and unparseable lines, the blank ones, and every
+      # line a selector held back — each byte for byte, in the file's order.
+      #
+      # == The tail, carried
+      #
+      # The formatter appends to the queue with no lock, so bytes can land
+      # after {#read_source} and before this rewrite. Those bytes are the
+      # tail: everything in the file NOW past the length read then, carried
+      # into the rewrite verbatim. They were never delivered, so the accepted
+      # set can never name them — carrying them is what keeps a concurrent
+      # append from being destroyed by the very run that emptied the queue.
+      #
+      # == The residual race, disclosed rather than closed
+      #
+      # The tail read below is as late as the design can put it, which narrows
+      # the race to read → rename: bytes a formatter appends AFTER that read
+      # but BEFORE {File.rename} lands go to the old inode and are lost when
+      # the rename swaps the directory entry. The window is two syscalls wide
+      # and is NOT closed — closing it would take a lock in the formatter, and
+      # that is deliberately out of scope here. What this code claims is
+      # narrower: everything appended before the final read survives, and a
+      # failure at any point before the rename leaves the original
+      # byte-identical.
+      #
+      # Nothing is written unless something was accepted: a drain over a file
+      # whose every line was refused, or whose selector held everything back,
+      # leaves the file — and its mtime — exactly as it was.
+      #
+      # @return [Drain] what was removed; `failed`, with the warning already
+      #   on stderr, when the rewrite could not complete
+      def drain_source(source, results)
+        accepted = results.select { |result| result.status == :accepted }.map(&:number)
+        return Drain.new(removed: 0, failed: false) if accepted.empty?
+
+        # Binary throughout: `raw` is the file's bytes, and the rebuild is a
+        # byte operation, not a character one. `each_line` splits on the same
+        # `"\n"` the numbering was counted with, so `number` here is the
+        # number the reports printed.
+        kept = String.new(encoding: Encoding::BINARY)
+        source.raw.each_line.with_index(1) do |text, number|
+          kept << text unless accepted.include?(number)
+        end
+
+        current = File.binread(source.path)
+        appended =
+          if current.bytesize > source.read_bytes
+            current.byteslice(source.read_bytes, current.bytesize - source.read_bytes)
+          else
+            String.new(encoding: Encoding::BINARY)
+          end
+
+        drain_write(source.path, kept + appended)
+        Drain.new(removed: accepted.length, failed: false)
+      rescue SystemCallError, IOError => e
+        # Stated, never silent — and reported without costing the delivery
+        # report: stdout below is still the full per-line report, this warning
+        # names the file, and {#exit_code} turns the run into a 2, because a
+        # 0 would read as "drained" about a queue that was not.
+        @stderr.puts "specguard-ingest: warning: could not remove the accepted lines from #{source.path}: " \
+                     "#{e.message} — the file is left as it was"
+        Drain.new(removed: 0, failed: true)
+      end
+
+      # The atomic swap: a temporary file in the SAME directory — `rename` is
+      # only atomic within one filesystem — renamed over the original. A
+      # failure at any point before the rename leaves the original untouched,
+      # and the `ensure` takes the temporary with it.
+      def drain_write(path, content)
+        tmp = File.join(File.dirname(path),
+                        ".#{File.basename(path)}.drain-#{Process.pid}-#{rand(1 << 32).to_s(36)}.tmp")
+        begin
+          File.binwrite(tmp, content)
+          File.rename(tmp, path)
+        ensure
+          File.unlink(tmp) if File.exist?(tmp)
+        end
+      end
+
       # @return [Options, nil] `nil` when `--help` or `--version` has already
       #   said everything the invocation was asking for.
       def parse_options(argv)
@@ -946,6 +1148,7 @@ module SpecGuard
         line_set = nil
         list = false
         json = false
+        drain = false
 
         parser = OptionParser.new do |o|
           o.banner = BANNER
@@ -985,6 +1188,13 @@ module SpecGuard
           o.on("--json", "Emit one JSON document on stdout instead of the human report") do
             json = true
           end
+          # Delivery-shaped and opt-in: it changes nothing about what is sent,
+          # only what happens to <file> afterwards, and the guards below hold
+          # it to the queue and refuse it a listing.
+          o.on("--drain", "After delivering, remove from <file> exactly the lines this run accepted —",
+               "atomically, keeping every other line byte for byte") do
+            drain = true
+          end
           o.on("-v", "--version", "Print the version and exit") do
             @stdout.puts "specguard-ruby #{VERSION}"
             return nil
@@ -1006,7 +1216,35 @@ module SpecGuard
           raise UsageError, "--from-line and --lines both choose which lines to send; give one or the other"
         end
 
-        Options.new(path: files.first, from_line: from_line || 1, list: list, line_set: line_set, json: json)
+        # `--drain` follows the delivery; `--list` is the refusal to deliver.
+        # They are not an intersection to resolve but two answers to "does this
+        # run send anything", and a listing that also drained would either
+        # drain nothing silently or drain without the deliveries the removal
+        # is keyed to — both are the quiet-failure shape this file refuses.
+        if drain && list
+          raise UsageError, "--drain delivers and removes the lines that were accepted; " \
+                            "--list delivers nothing, so there is nothing for it to drain"
+        end
+
+        # The drain may empty the replay queue and nothing else. A path that
+        # is not {Configuration#output_path} is either the local record — a
+        # development record of ordinary keyless runs, not a queue, where
+        # removing accepted lines would delete runs that were never failures —
+        # or a file this invocation was pointed at by mistake. The comparison
+        # is exact string equality, the one {#no_such_file_message} makes: a
+        # path spelled differently from the configuration is refused rather
+        # than resolved, and SPECGUARD_OUTPUT_PATH relocates the drain with
+        # the queue.
+        if drain
+          queue = Configuration.new(env: @env).output_path
+          if files.first != queue
+            raise UsageError, "--drain empties the replay queue, and #{files.first} is not it " \
+                              "(configured as #{queue}) — the local record is a development record, not a queue"
+          end
+        end
+
+        Options.new(path: files.first, from_line: from_line || 1, list: list, line_set: line_set, json: json,
+                    drain: drain)
       rescue OptionParser::ParseError => e
         # Uncaught, this is the likeliest way a user sees a false "the endpoint
         # refused your run": OptionParser raises and Ruby exits 1. Retyping it

@@ -839,6 +839,69 @@ were ingested, so a replayed run becomes the repository's latest. For the case
 this exists to serve — replay the run that just failed, right after fixing the
 credential — that is correct.
 
+#### Draining the queue as it is accepted — `--drain`
+
+The replay queue is *runs offered to the endpoint and not accepted* — and until
+the run is drained, a line the endpoint **did** accept stays in it. The next
+incident's failures append behind it, and "re-running the command is the retry"
+then re-sends every one of those already-accepted runs: harmless when the line
+carries a `ci_run_id` (it folds onto the run it already made), a duplicate row
+when it does not. `--drain` is the opt-in follow-through:
+
+```bash
+bundle exec specguard-ingest --drain log/test_results.jsonl
+```
+
+```
+line 1: accepted — HTTP 202, test_run_id 41f2c9b8, ci_run_id 17442
+line 2: not delivered — HTTP 503 — upstream is down
+specguard-ingest: delivered 1 of 2 runs from log/test_results.jsonl; 1 could not be delivered; 1 accepted line removed from log/test_results.jsonl
+```
+
+Only the lines answered `202` **in this invocation** are removed — there is no
+heuristic and nothing is guessed at, which is the same line the rest of this
+command draws. Everything else stays **byte for byte, in the file's order**:
+
+- **refused** lines — a `400` is refused every time it is offered, and the
+  payload still needs fixing;
+- **undelivered** lines — the endpoint never stored them, so they were never
+  accepted;
+- **unparseable** lines — never a run, so never accepted;
+- **blank** lines — never anything;
+- every line **`--from-line` or `--lines` held back** — it was not sent, so it
+  was not accepted, whatever the endpoint would have said.
+
+The rewrite is **atomic**: a temporary file in the same directory, renamed over
+the original, so a failure mid-drain leaves the file exactly as it was — and
+nothing is written at all unless something was actually accepted.
+
+**A concurrent append is carried.** The formatter appends to the queue with no
+lock, so a run can land while the deliveries are still going. Bytes appended
+after the file was read and before the rewrite are carried into it verbatim.
+One window remains — the instant between the final read and the rename — and
+it is disclosed in the code rather than claimed closed; closing it would take a
+lock in the formatter, which is deliberately not this flag's business.
+
+**Only the replay queue is drained.** Another path is refused with a `2` — the
+local record `log/test_results.local.jsonl` is a development record, not a
+queue, and removing accepted lines from it would delete ordinary laptop runs
+that were never failures. The comparison is exact: the file must be spelled as
+`SPECGUARD_OUTPUT_PATH` (or the default) configures the queue. `--drain` with
+`--list` is refused with a `2` as well — a listing delivers nothing, so there
+is nothing for it to drain.
+
+The removal is **stated, never silent**: the summary gains the clause above,
+and the `--json` document's `summary` carries a `drained` count (absent without
+the flag). A drain that cannot complete is a `2` — the delivery report still
+prints in full, a warning on stderr names the file, and the file is left as it
+was, because a `0` would read as "drained" about a queue that was not.
+
+When the whole queue was accepted, the file is left **empty**, and the next
+`specguard-ingest` run — with or without `--drain` — sends nothing, warns, and
+exits `0`, exactly as it does over any empty file. Draining by default is
+deliberately not the behaviour: a tool that deletes your queue unless told not
+to has made the product decision for you.
+
 #### Machine-readable output — `--json`
 
 An HTTP `400` is the one **permanent** verdict in the table above: a refused line
@@ -896,6 +959,7 @@ bundle exec specguard-ingest --json log/test_results.jsonl
 | `summary.blank` / `skipped` | the two ways a line of the file is not a row here, counted rather than dropped |
 | `summary.absent` | the `--lines` numbers the file does not have, in the shorthand you typed them — a number or an `N-M` range per entry — or `null` when the selector was fully satisfied; never `[]`, on `selector`'s terms |
 | `summary.selector` | `"--lines"`, `"--from-line"`, or `null` when nothing was held back |
+| `summary.drained` | with `--drain`: how many accepted lines were removed from the file — `0` where the flag asked and nothing was accepted. Absent without the flag, and never present under `--list`, which cannot drain |
 | `lines[]` | one entry per row, in the file's order |
 | `foldings[]` | folding, **observed**: the lines that went out with one `ci_run_id` and came back with one `test_run_id`. The same statement the text report makes as a sentence |
 

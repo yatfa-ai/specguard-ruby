@@ -1194,6 +1194,335 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
     end
   end
 
+  # SPGD-1450. A successful replay leaves the queue byte-identical — until this
+  # flag this file had no write, rename or truncate path — so the next
+  # incident's failures append behind runs that already landed, and "re-running
+  # the command is the retry" re-sends every one of them. A line with a
+  # `ci_run_id` folds onto the run it already made; a line without one has
+  # nothing to fold onto and becomes a second row on the platform. The replay
+  # queue is failure-only by construction, so removing the lines the endpoint
+  # just accepted is coherent in a way draining the mixed local record never
+  # was — which is why the drain refuses any other path.
+  #
+  # So `--drain` is opt-in, delivery-shaped, and narrow about what it removes:
+  # only lines answered 202 **in this invocation**. Everything else — refused,
+  # undelivered, unparseable and blank lines, and every line a selector held
+  # back — survives byte for byte, in the file's order. The rewrite is atomic
+  # (a temp file in the same directory, renamed over the original) and carries
+  # bytes appended while the deliveries ran; the window that remains after that
+  # is disclosed in the code, never claimed closed.
+  describe "--drain, emptying the queue as it is accepted" do
+    # A mixed-status fixture in the shape `regression_targets_spec.rb` pins:
+    # one accepted line, a blank, one the endpoint refuses, one it never
+    # stores, and one that was never a run.
+    def mixed_sink
+      @mixed_sink ||= begin
+        path = File.join(@dir, "mixed.jsonl")
+        File.binwrite(path, mixed_original)
+        path
+      end
+    end
+
+    def mixed_original
+      [JSON.generate(run_payload(ci_run_id: "ok")), "",
+       JSON.generate(run_payload(ci_run_id: "refused")),
+       JSON.generate(run_payload(ci_run_id: "down")),
+       "{not json"].join("\n") + "\n"
+    end
+
+    # What the drain owes the mixed file: every line but the accepted one,
+    # byte for byte, in the file's order — the blank line included.
+    def mixed_kept
+      ["", JSON.generate(run_payload(ci_run_id: "refused")),
+       JSON.generate(run_payload(ci_run_id: "down")),
+       "{not json"].join("\n") + "\n"
+    end
+
+    def refusal = { status: 400, body: '{"message":"spec 1: outcome is required"}' }
+    def outage = { status: 503, body: '{"message":"upstream is down"}' }
+
+    def drained_cli(server, out_io, err_io, queue: nil)
+      # The drain empties the CONFIGURED queue and nothing else, so every
+      # example that wants a drain must configure one — a temp file is not the
+      # queue until this names it. The guard examples deliberately omit it.
+      extra = queue ? { "SPECGUARD_OUTPUT_PATH" => queue } : {}
+      described_class.new(stdout: out_io, stderr: err_io,
+                          env: env.merge("SPECGUARD_ENDPOINT" => server.endpoint, **extra))
+    end
+
+    def rebuild(path, *lines)
+      File.binwrite(path, lines.map { |line| "#{line}\n" }.join)
+    end
+
+    # AC1, both halves in one example so they cannot drift apart: the drain
+    # empties a queue whose every line was accepted, and the second run — the
+    # one the README calls the retry — POSTs nothing over the empty file, warns
+    # exactly as it always has, and still exits 0.
+    # @intent: { entity: "specguard-ingest --drain", action: "drain an accepted queue", behavior: "a queue whose every line was accepted becomes zero bytes and a second drain run sends nothing", layer: "unit" }
+    it "empties a queue whose lines were all accepted, and a second --drain sends nothing" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"))
+
+      StubIngestEndpoint.run do |server|
+        expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(0)
+        expect(server.requests.length).to eq(2)
+        expect(File.binread(path)).to be_empty
+        expect(out).to include("; 2 accepted lines removed from #{path}")
+
+        second_out, second_err = StringIO.new, StringIO.new
+        expect(drained_cli(server, second_out, second_err, queue: path).run(["--drain", path])).to eq(0)
+        expect(server.requests.length).to eq(2)
+        expect(second_err.string).to eq("specguard-ingest: warning: #{path} holds no runs to deliver\n")
+        expect(second_out.string).to be_empty
+        expect(File.binread(path)).to be_empty
+      end
+    end
+
+    # AC2. Five statuses in one file, after the drain exactly the non-accepted
+    # lines remain, byte for byte, in the file's order: refused (a 400 is
+    # refused every time it is offered), undelivered (never arrived),
+    # unparseable (never a run), blank (never anything).
+    # @intent: { entity: "specguard-ingest --drain", action: "drain a mixed file", behavior: "only the lines the endpoint accepted are removed and every other line survives byte for byte in order", layer: "unit" }
+    it "keeps exactly the non-accepted lines of a mixed file, byte for byte, in order" do
+      StubIngestEndpoint.run(responses: [{}, refusal, outage]) do |server|
+        code = drained_cli(server, stdout, stderr, queue: mixed_sink).run(["--drain", mixed_sink])
+
+        # 2 dominates: the refused line and the undelivered one are both still
+        # in the file, and the exit code shouts the one that leaves work undone.
+        expect(code).to eq(2)
+        expect(server.requests.length).to eq(3)
+        expect(File.binread(mixed_sink)).to eq(mixed_kept)
+        expect(out).to include("delivered 1 of 4 runs from #{mixed_sink}")
+        expect(out).to include("; 1 accepted line removed from #{mixed_sink}")
+      end
+    end
+
+    # AC3, first selector. A held-back line survives even though the endpoint
+    # would have accepted it: the drain removes what THIS invocation got a 202
+    # for, never what it did not send.
+    # @intent: { entity: "specguard-ingest --drain", action: "drain under a selector", behavior: "with --lines the drain removes at most the named accepted lines and holds every other one", layer: "unit" }
+    it "removes at most the lines --lines named, holding every other one" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"), run_payload(ci_run_id: "c"))
+
+      StubIngestEndpoint.run do |server|
+        code = drained_cli(server, stdout, stderr, queue: path).run(["--drain", "--lines", "2", path])
+
+        expect(code).to eq(0)
+        expect(server.requests.map { |r| r.json["ci_run_id"] }).to eq(%w[b])
+        expect(File.binread(path)).to eq("#{JSON.generate(run_payload(ci_run_id: 'a'))}\n" \
+                                         "#{JSON.generate(run_payload(ci_run_id: 'c'))}\n")
+        expect(out).to include("; 1 accepted line removed from #{path}")
+      end
+    end
+
+    # AC3, second selector: the skipped prefix is the drain's to preserve, and
+    # the refused line in the delivered suffix is too.
+    # @intent: { entity: "specguard-ingest --drain", action: "drain under a selector", behavior: "with --from-line the skipped prefix and the refused suffix survive while the accepted line goes", layer: "unit" }
+    it "removes the accepted suffix under --from-line, keeping the skipped prefix" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"), run_payload(ci_run_id: "c"))
+
+      StubIngestEndpoint.run(responses: [{}, refusal]) do |server|
+        code = drained_cli(server, stdout, stderr, queue: path).run(["--drain", "--from-line", "2", path])
+
+        expect(code).to eq(1)
+        expect(server.requests.map { |r| r.json["ci_run_id"] }).to eq(%w[b c])
+        expect(File.binread(path)).to eq("#{JSON.generate(run_payload(ci_run_id: 'a'))}\n" \
+                                         "#{JSON.generate(run_payload(ci_run_id: 'c'))}\n")
+        expect(out).to include("; 1 accepted line removed from #{path}")
+      end
+    end
+
+    # AC4, and the tail-carry receipt. The formatter appends to the queue with
+    # no lock, so a run can land while the deliveries are still going — the
+    # exact window between `read_source` and the rewrite. The append is driven
+    # through a seam on the instance, after the first delivery. Dropping the
+    # tail-carry fails this example, and so does the naive
+    # `File.write(path, kept.join)`: both throw the appended line away.
+    # @intent: { entity: "specguard-ingest --drain", action: "carry concurrent appends", behavior: "a line appended while the deliveries ran survives the rewrite byte for byte", layer: "unit" }
+    it "carries a line appended while the deliveries ran into the rewrite" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"))
+      appended = "#{JSON.generate(run_payload(ci_run_id: 'appended'))}\n"
+
+      StubIngestEndpoint.run do |server|
+        cli = drained_cli(server, stdout, stderr, queue: path)
+        cli.define_singleton_method(:deliver_line) do |number, text, transport|
+          result = super(number, text, transport)
+          # After the first delivery: `read_source` is behind it, the rewrite
+          # is ahead of it — the window the tail-carry exists for.
+          File.open(path, "a") { |file| file.write(appended) } if number == 1
+          result
+        end
+
+        expect(cli.run(["--drain", path])).to eq(0)
+        expect(server.requests.map { |r| r.json["ci_run_id"] }).to eq(%w[a b])
+        expect(File.binread(path)).to eq(appended)
+      end
+    end
+
+    # Guards, both exit 2 with the file byte-identical — a refusal that moved
+    # the file would not be a refusal.
+    # @intent: { entity: "specguard-ingest --drain", action: "refuse misuse", behavior: "combining the drain with a listing exits two and leaves the file untouched", layer: "unit" }
+    it "refuses to combine with --list, leaving the file untouched" do
+      path = mixed_sink
+      before = File.binread(path)
+
+      code = described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--drain", "--list", path])
+
+      expect(code).to eq(2)
+      expect(err).to eq("specguard-ingest: error: --drain delivers and removes the lines that were accepted; " \
+                        "--list delivers nothing, so there is nothing for it to drain\n")
+      expect(File.binread(path)).to eq(before)
+    end
+
+    # The queue the drain may empty is the one the formatter appends refused
+    # runs to — any other file is either the local record (a development
+    # record, not a queue) or something this tool was pointed at by mistake.
+    # Nothing is delivered either: the refusal fires before the transport does.
+    # @intent: { entity: "specguard-ingest --drain", action: "refuse misuse", behavior: "a path that is not the configured replay queue exits two with the file untouched and nothing delivered", layer: "unit" }
+    it "refuses to drain a path that is not the configured replay queue" do
+      path = mixed_sink
+      before = File.binread(path)
+
+      StubIngestEndpoint.run do |server|
+        # No SPECGUARD_OUTPUT_PATH: the temp file is not the configured queue,
+        # which is exactly the situation the guard exists for.
+        expect(drained_cli(server, stdout, stderr).run(["--drain", path])).to eq(2)
+        expect(server.requests).to be_empty
+      end
+
+      expect(err).to include("--drain empties the replay queue, and #{path} is not it")
+      expect(err).to include("the local record is a development record, not a queue")
+      expect(File.binread(path)).to eq(before)
+    end
+
+    # The equality is exact, on `no_such_file_message`'s terms — and it is the
+    # CONFIGURED queue the guard compares against, so SPECGUARD_OUTPUT_PATH
+    # relocates the drain with it.
+    # @intent: { entity: "specguard-ingest --drain", action: "drain the configured queue", behavior: "a file spelled exactly as SPECGUARD_OUTPUT_PATH configures the queue drains", layer: "unit" }
+    it "drains a file spelled exactly as SPECGUARD_OUTPUT_PATH configures the queue" do
+      path = sink(run_payload(ci_run_id: "a"))
+
+      StubIngestEndpoint.run do |server|
+        code = drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])
+
+        expect(code).to eq(0)
+        expect(server.requests.length).to eq(1)
+        expect(File.binread(path)).to be_empty
+      end
+    end
+
+    # The atomicity receipt, observable at the step the contract is written
+    # against: the replacement goes through a same-directory temporary file,
+    # and the original is byte-identical at the instant of the rename. An
+    # in-place `File.write` never calls `rename`, so it fails here — and at
+    # the failure-injection example below.
+    # @intent: { entity: "specguard-ingest --drain", action: "replace atomically", behavior: "the rewrite is swapped in through a same-directory rename with the original intact until the swap", layer: "unit" }
+    it "swaps the rewrite in through a same-directory rename, original intact until the swap" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"))
+      original = File.binread(path)
+      observed = {}
+
+      StubIngestEndpoint.run do |server|
+        allow(File).to receive(:rename).and_wrap_original do |rename, src, dst|
+          observed[:same_dir] = File.dirname(src) == File.dirname(dst)
+          observed[:distinct_name] = File.basename(src) != File.basename(dst)
+          observed[:original_intact] = File.binread(dst) == original
+          rename.call(src, dst)
+        end
+
+        expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(0)
+      end
+
+      expect(File).to have_received(:rename)
+      expect(observed).to eq(same_dir: true, distinct_name: true, original_intact: true)
+      expect(File.binread(path)).to be_empty
+    end
+
+    # A failure mid-drain leaves the original intact — the whole point of the
+    # temp file — leaves no stray temporary behind, and is stated, never
+    # silent: the deliveries are still reported in full, the warning names the
+    # file, and the run exits 2, because a 0 would read as "drained" about a
+    # queue that was not.
+    # @intent: { entity: "specguard-ingest --drain", action: "replace atomically", behavior: "a rename that fails leaves the file byte-identical with no stray temp and exits two over a full delivery report", layer: "unit" }
+    it "leaves the file byte-identical and exits 2 when the rename fails" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"))
+      original = File.binread(path)
+
+      StubIngestEndpoint.run do |server|
+        allow(File).to receive(:rename).and_raise(Errno::EIO)
+
+        expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(2)
+      end
+
+      expect(File.binread(path)).to eq(original)
+      expect(Dir.children(@dir)).to eq([File.basename(path)])
+      expect(err).to include("could not remove the accepted lines from #{path}")
+      expect(err).to include("the file is left as it was")
+      expect(out).to include("line 1: accepted")
+      expect(out).not_to include("accepted lines removed")
+    end
+
+    # --json carries the same fact as data, and carries it ONLY under the flag:
+    # without --drain the document is what it always was, which is the --json
+    # half of the flag being opt-in. Both sides in one example so they cannot
+    # drift.
+    # @intent: { entity: "specguard-ingest --drain", action: "state the removal", behavior: "the json summary carries a drained count under the flag and no drained key without it", layer: "unit" }
+    it "states the removal in the --json summary, and only under the flag" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"))
+
+      StubIngestEndpoint.run do |server|
+        json_io = StringIO.new
+        expect(drained_cli(server, json_io, StringIO.new, queue: path).run(["--json", "--drain", path])).to eq(0)
+        expect(JSON.parse(json_io.string)["summary"]["drained"]).to eq(2)
+        expect(File.binread(path)).to be_empty
+
+        rebuild(path, JSON.generate(run_payload(ci_run_id: "a")), JSON.generate(run_payload(ci_run_id: "b")))
+        plain_io = StringIO.new
+        expect(drained_cli(server, plain_io, StringIO.new).run(["--json", path])).to eq(0)
+        expect(JSON.parse(plain_io.string)["summary"]).not_to have_key("drained")
+      end
+    end
+
+    # The clause is the human half of "stated, never silent" — and its absence
+    # without the flag is the other half. One example holds both sides, plus
+    # the whole default non-interference pin: same fixture, both flags, and
+    # without the flag the stdout is the pre-drain bytes exactly and the file
+    # does not move.
+    # @intent: { entity: "specguard-ingest --drain", action: "state the removal", behavior: "the summary names the removed lines under the flag and prints the unchanged default report without it", layer: "unit" }
+    it "names the removal in the summary line, and only when the flag asked for it" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"))
+
+      StubIngestEndpoint.run do |server|
+        expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(0)
+        expect(out).to include("delivered 2 of 2 runs from #{path}; 2 accepted lines removed from #{path}")
+
+        rebuild(path, JSON.generate(run_payload(ci_run_id: "a")), JSON.generate(run_payload(ci_run_id: "b")))
+        before = File.binread(path)
+        plain = StringIO.new
+        expect(drained_cli(server, plain, StringIO.new).run([path])).to eq(0)
+        expect(plain.string).to eq(<<~OUT)
+          line 1: accepted — HTTP 202, test_run_id 9f8e7d6, ci_run_id a
+          line 2: accepted — HTTP 202, test_run_id 9f8e7d6, ci_run_id b
+          specguard-ingest: delivered 2 of 2 runs from #{path}
+        OUT
+        expect(File.binread(path)).to eq(before)
+      end
+    end
+
+    # AC9's help half. Fragment-asserted like every help pin in this file, so a
+    # reflow does not break it and a deletion does.
+    # @intent: { entity: "specguard-ingest --drain", action: "document the flag", behavior: "the help documents the drain beside the selectors, its guards and its exit-code nuance", layer: "unit" }
+    it "documents --drain in the help, beside the selectors it composes with" do
+      expect(described_class.new(stdout: stdout, stderr: stderr, env: {}).run(["--help"])).to eq(0)
+      screen = out.gsub(/\s+/, " ")
+
+      expect(screen).to include("--drain is the follow-through, and it is opt-in")
+      expect(screen).to include("refused, undelivered, unparseable and blank lines, and every line " \
+                                "--from-line or --lines held back")
+      expect(screen).to include("a rewrite that could not complete is a 2 as well — the file is left as it was")
+      expect(screen).to include("After delivering, remove from <file> exactly the lines this run accepted")
+    end
+  end
+
   # The command's own README paragraph says a laptop's file is a file of
   # ordinary local runs, that all of them will be sent, and to "check the file
   # before you replay one you did not write" — and until `--list` there was no
