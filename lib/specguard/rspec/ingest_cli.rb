@@ -1129,13 +1129,26 @@ module SpecGuard
       # The atomic swap: a temporary file in the SAME directory — `rename` is
       # only atomic within one filesystem — renamed over the original. A
       # failure at any point before the rename leaves the original untouched,
-      # and the `ensure` takes the temporary with it.
+      # and the `ensure` takes the temporary with it. The rename lands on the
+      # RESOLVED target (`File.realpath`), so a queue reached through a
+      # symlink is rewritten at the file the link points to and the link
+      # itself survives: `rename(2)` replaces the directory entry at the path
+      # given to it, and without this the swap would turn the link into a
+      # regular file while the real target kept every line just accepted —
+      # lines the next drain would then send again. The replacement is
+      # chmod'ed to the target's mode before the swap, because
+      # `File.binwrite` creates it under the umask's defaults and a queue
+      # restricted to 0600 would come back 0644 as a fresh inode. Ownership
+      # is deliberately NOT carried over: `chown` needs privilege, and in
+      # practice the drain runs as the queue's owner.
       def drain_write(path, content)
-        tmp = File.join(File.dirname(path),
-                        ".#{File.basename(path)}.drain-#{Process.pid}-#{rand(1 << 32).to_s(36)}.tmp")
+        target = File.realpath(path)
+        tmp = File.join(File.dirname(target),
+                        ".#{File.basename(target)}.drain-#{Process.pid}-#{rand(1 << 32).to_s(36)}.tmp")
         begin
           File.binwrite(tmp, content)
-          File.rename(tmp, path)
+          File.chmod(File.stat(target).mode & 0o7777, tmp)
+          File.rename(tmp, target)
         ensure
           File.unlink(tmp) if File.exist?(tmp)
         end

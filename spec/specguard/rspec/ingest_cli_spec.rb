@@ -1461,6 +1461,46 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
       expect(out).not_to include("accepted lines removed")
     end
 
+    # The swap must not reset the file's mode: `File.binwrite` creates its
+    # temporary under the umask's defaults, so without an explicit chmod a
+    # queue restricted to 0640 comes back 0644 as a fresh inode. 0640 rather
+    # than 0600 so the example cannot pass by accident: 0600 is exactly the
+    # default under umask 077, where this would pass without the fix.
+    # @intent: { entity: "specguard-ingest --drain", action: "replace atomically", behavior: "the rewritten queue keeps the file mode it had before the swap", layer: "unit" }
+    it "keeps the queue file's mode through the atomic swap" do
+      path = mixed_sink
+      File.chmod(0o640, path)
+
+      StubIngestEndpoint.run(responses: [{}, refusal, outage]) do |server|
+        expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(2)
+      end
+
+      expect(File.stat(path).mode & 0o7777).to eq(0o640)
+      expect(File.binread(path)).to eq(mixed_kept)
+    end
+
+    # `rename(2)` replaces the directory entry at the path it is given, so on
+    # a queue reached through a symlink the naive swap would replace the link
+    # itself with a regular file — and leave the real target, the file the
+    # formatter and the next drain keep working on, holding every line just
+    # accepted, which are then sent again. The rewrite must land on the
+    # resolved target instead, with the link itself left in place.
+    # @intent: { entity: "specguard-ingest --drain", action: "replace atomically", behavior: "draining a symlinked queue rewrites the link's target byte for byte and leaves the link itself in place", layer: "unit" }
+    it "rewrites a symlinked queue's target, leaving the link itself in place" do
+      target_path = File.join(@dir, "target.jsonl")
+      File.binwrite(target_path, mixed_original)
+      path = File.join(@dir, "queue-link.jsonl")
+      File.symlink(target_path, path)
+
+      StubIngestEndpoint.run(responses: [{}, refusal, outage]) do |server|
+        expect(drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])).to eq(2)
+      end
+
+      expect(File.symlink?(path)).to be(true)
+      expect(File.readlink(path)).to eq(target_path)
+      expect(File.binread(target_path)).to eq(mixed_kept)
+    end
+
     # --json carries the same fact as data, and carries it ONLY under the flag:
     # without --drain the document is what it always was, which is the --json
     # half of the flag being opt-in. Both sides in one example so they cannot
