@@ -1491,20 +1491,22 @@ RSpec.describe SpecGuard::RSpecFormatter do
 
   # SPGD-121 criterion 5: "a spec that fails if the rescue is removed".
   #
-  # Deleting the `rescue` in `never_fail_the_run` fails 17 of this block's 19
-  # examples. The count is BLOCK-scoped and says nothing about the rest: the
-  # same mutation fails 18 in this file and 23 suite-wide (the other 5 are
-  # process-level, in formatter_run_spec.rb's "when the sink cannot be written"
-  # and "when the annotation scanner blows up"). All four figures come from one
-  # `bundle exec rspec` of 1205 examples, sliced by scope — not from four
-  # separate runs, and re-measured at that size by SPGD-1413.
+  # Deleting the `rescue` in `never_fail_the_run` fails a large majority of
+  # this block's examples, plus the "when the annotation scanner blows up"
+  # block in formatter_run_spec.rb. The count is deliberately not pinned here:
+  # it legitimately falls as nearer rescues take arms off this guard, and both
+  # such moves are landed decisions — SPGD-1413 moved the fall-back write off
+  # it ({#append} catches the queue write's failure itself), and SPGD-1426
+  # moved the keyless sink write off it ({#append_local} composes its own
+  # line). Each moved example now fails its own nearer pin instead, so
+  # re-counting here would only rot. The same SPGD-1426 move is also why
+  # formatter_run_spec.rb's "when the sink cannot be written" block stopped
+  # defending this rescue: its assertions hold through {#append_local}'s own
+  # rescue, with or without this one.
   #
-  # The 18th, outside this block, is "is not swallowed by a warning budget an
-  # earlier failure already spent". SPGD-1413 removed a 19th: "survives a
-  # fallback write that fails too" used to reach this rescue, because `#append`
-  # let the queue's write raise. It now catches that failure itself and reports
-  # it in the fall-back's own line, so the example no longer depends on this
-  # guard — the run is still never failed by it, by a nearer rescue.
+  # One example the deletion still fails sits outside this block entirely: "is
+  # not swallowed by a warning budget an earlier failure already spent", whose
+  # budget is spent by a broken example rather than by the sink.
   #
   # The two examples that do NOT fail on deletion are "does NOT swallow an
   # interrupt" and "does NOT swallow an interrupt raised from the lookup", and
