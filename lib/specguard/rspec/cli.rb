@@ -126,10 +126,12 @@ module SpecGuard
       # "Lint, don't require": a missing annotation is never an error.
       EXIT_OK = 0
       # One or more annotations are malformed — or well-formed but
-      # unreachable (SPGD-900: stacked above another comment-form `@intent:`
-      # line, so the one-line lookback never claims it, a dead contract that
-      # is still a failure). The only code produced by inspecting content,
-      # and the only path that reaches it is a failed {Linter::Result}.
+      # unreachable (SPGD-900/SPGD-1510: stacked above another comment-form
+      # `@intent:` line so the one-line lookback never claims it, or trailing
+      # on an example-group line no example's extraction can reach — a dead
+      # contract either way, and still a failure). The only code produced by
+      # inspecting content, and the only path that reaches it is a failed
+      # {Linter::Result}.
       EXIT_MALFORMED = 1
       # The linter could not do its job: bad flags, `--changed` outside a git
       # repository, a validator that could not be resolved, or an unexpected
@@ -165,12 +167,14 @@ module SpecGuard
 
         results = backend.check(selection.files)
 
-        # The structural pass (SPGD-900): annotations that are valid in
-        # isolation but can never be extracted — stacked consecutive
+        # The structural pass (SPGD-900, SPGD-1510): annotations that are
+        # valid in isolation but can never be extracted — stacked consecutive
         # comment-form `@intent:` lines, where the one-line lookback
-        # (SPGD-12 §2) claims only the line just above the example. These are
-        # Linter::Results like any other, so both renderers and the exit code
-        # pick them up with no second path to keep in step.
+        # (SPGD-12 §2) claims only the line just above the example, and
+        # `@intent:` tokens trailing on an example-group line, which no
+        # extraction rule can ever reach. These are Linter::Results like any
+        # other, so both renderers and the exit code pick them up with no
+        # second path to keep in step.
         results += unreachable_results(selection.files)
 
         # Computed once, here, and handed to whichever renderer runs. `--json`
@@ -476,15 +480,16 @@ module SpecGuard
       #
       # The boundary is the set-difference the partition above already
       # supports: a file counts as covered when it yielded any line-scoped
-      # result (an annotation, valid or not — the SPGD-900 unreachable findings
-      # are line-scoped too and require an annotation to exist, so they cover
-      # their file) or when it could not be read at all (KIND_READ → `unread`).
-      # An unread file is NOT a zero-annotation file: it already gets its own
-      # summary clause and FAIL line, and calling it annotation-free would be
-      # the same overstatement `summary_line` refuses to make. Unreachable
-      # findings need a stacked annotation — impossible in a file with none —
-      # so `annotations ∪ unread` already covers every non-bare file and no
-      # third subtraction is needed.
+      # result (an annotation, valid or not — the SPGD-900/SPGD-1510
+      # unreachable findings are line-scoped too and require an annotation to
+      # exist, so they cover their file) or when it could not be read at all
+      # (KIND_READ → `unread`). An unread file is NOT a zero-annotation file:
+      # it already gets its own summary clause and FAIL line, and calling it
+      # annotation-free would be the same overstatement `summary_line` refuses
+      # to make. Unreachable findings need an annotation to exist — a stacked
+      # comment-form pair, or an `@intent:` token on a group line — impossible
+      # in a file with none, so `annotations ∪ unread` already covers every
+      # non-bare file and no third subtraction is needed.
       #
       # It is a NOTE on stderr, never a warning and never an exit code: "lint,
       # don't require" (SPGD-12 §1) keeps a missing annotation a non-error.

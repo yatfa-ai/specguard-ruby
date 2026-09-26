@@ -258,25 +258,41 @@ module SpecGuard
       #
       # Everything above validates each annotation IN ISOLATION — one payload,
       # one verdict. But the formatter's extraction contract
-      # ({AnnotationLookup}, SPGD-12 §2) is positional: only the comment-form
-      # annotation on the line IMMEDIATELY ABOVE an example is inheritable.
-      # So when two consecutive comment-form `@intent:` lines sit above one
-      # `it`, the UPPER line is unreachable — silently discarded by the
-      # one-line lookback — while this pipeline counts it as a valid
-      # annotation and the run exits 0. Measured (SPGD-897 audit): 16 such
-      # stacked pairs shipped through `specguard-lint` exit 0, every upper
-      # contract dead. Reported loudly, not skipped — the same stance
+      # ({AnnotationLookup}, SPGD-12 §2) is positional: an annotation reaches
+      # an example only through its own line (the trailing form, and only when
+      # that line IS the example's) or through the comment-form line
+      # IMMEDIATELY ABOVE it. Two shapes fall outside both and are dead the
+      # moment they are written — silently discarded by extraction while this
+      # pipeline counts them as valid annotations and the run exits 0:
+      #
+      #   * the STACKED pair (SPGD-897, found in the audit): two consecutive
+      #     comment-form `@intent:` lines above one `it` — the UPPER line is
+      #     never claimed, because the one-line lookback takes only the line
+      #     just above the example. Measured: 16 such stacked pairs shipped
+      #     through `specguard-lint` exit 0, every upper contract dead.
+      #   * the GROUP line (SPGD-1510, cost SPGD-1475 a full rework round): an
+      #     `@intent:` trailing on a `describe`/`context`/… line. The line is
+      #     no example's own, and it is not comment-only, so no lookback can
+      #     ever claim it — the example beneath it silently ingests as
+      #     unannotated. A describe insertion that swallowed a newline is how
+      #     the shape is born.
+      #
+      # Both are reported loudly, not skipped — the same stance
       # {AnnotationScanner} takes for NO_PAYLOAD.
       #
       # A comment-form annotation line is a comment-only line
       # ({AnnotationLookup::COMMENT_LINE}) carrying the `@intent:` token. The
-      # trailing same-line form never matches COMMENT_LINE, so it is never
-      # flagged and never makes a neighbour unreachable — its annotation
-      # belongs to its own example's line and the lookback is not involved.
+      # trailing same-line form is claimed ONLY when the line itself defines
+      # an example ({EXAMPLE_LINE}); there the annotation belongs to its own
+      # example's line and the lookback is not involved. On any other line the
+      # trailing form is dead too — an example-group line carrying it is now
+      # flagged by {GROUP_LINE}'s pass below, with the one-liner exemption
+      # ({EXAMPLE_ON_LINE}) keeping `describe "x" do it("y") { } end` claims
+      # intact.
       #
       # @param paths [Enumerable<String>]
-      # @return [Array<Finding>] one per unreachable comment-form annotation,
-      #   in file-then-line order. A file that cannot be read contributes
+      # @return [Array<Finding>] one per unreachable annotation, in
+      #   file-then-line order. A file that cannot be read contributes
       #   nothing here — {ValidatorBackend} already reports read failures, and
       #   this pass has nothing positional to say about a file it never saw.
       def unreachable_findings(paths)
@@ -300,6 +316,13 @@ module SpecGuard
         "so the one-line lookback claims only the line just above the example " \
         "and this annotation is silently discarded at extraction (SPGD-12 §2)"
 
+      UNREACHABLE_GROUP_ANNOTATION =
+        "unreachable annotation: this @intent: sits trailing on an example-group line " \
+        "(describe/context/...), and annotations attach to examples, never to groups — " \
+        "extraction (SPGD-12 §2) is one-line and example-anchored, so no example can ever " \
+        "claim it. Move it onto its example's `it` line, or to the comment line directly " \
+        "above that `it`"
+
       # A comment-only line carrying an `@intent:` token — the only form an
       # example on the NEXT line may claim ({AnnotationLookup::COMMENT_LINE}).
       COMMENT_INTENT_LINE = /\A\s*#.*@intent:/
@@ -312,10 +335,31 @@ module SpecGuard
       # Anchoring on the example is what keeps this pass off annotation
       # corpora with no examples at all (the recorded-binary fixtures in
       # spec/fixtures/): there is no lookback there to silently discard
-      # anything, so there is nothing to report. The defect this pass exists
-      # for (SPGD-897) is stacked lines above a real example — an annotation
-      # the author believed was attached to the `it` under it.
+      # anything, so there is nothing to report. The defects this pass exists
+      # for are annotations an author believed were attached to a real
+      # example: stacked lines above it (SPGD-897), and the trailing form on
+      # a group line directly above it (SPGD-1510).
       EXAMPLE_LINE = /\A\s*(?:it|specify)\b/
+
+      # @param text [String] source of one file
+      # @param file [String] path to record on each Finding
+      # @return [Array<Finding>] the structural findings for one file, in line
+      #   order: one per comment-form `@intent:` line in a stacked run (see
+      #   {stacked_findings_in_text}) plus one per group line carrying the
+      #   trailing form (see {group_line_findings_in_text}). The two passes
+      #   are disjoint by construction — one reads only comment-only lines,
+      #   the other only lines that are not — so the merge cannot double-flag
+      #   a line, and the sort restores the file-then-line order
+      #   {unreachable_findings} promises.
+      def unreachable_findings_in_text(text, file:)
+        # A file that is not valid UTF-8 is reported once, loudly, by the
+        # backend as a read failure; nothing positional can be said about it,
+        # and `lines` below would raise on the invalid bytes.
+        return [] unless text.valid_encoding?
+
+        (stacked_findings_in_text(text, file: file) +
+         group_line_findings_in_text(text, file: file)).sort_by(&:line)
+      end
 
       # @param text [String] source of one file
       # @param file [String] path to record on each Finding
@@ -324,7 +368,7 @@ module SpecGuard
       #   lines immediately above an example — except the run's LAST line,
       #   which is the one the one-line lookback claims. For the canonical
       #   two-line stack above one `it`, that is the UPPER line.
-      def unreachable_findings_in_text(text, file:)
+      def stacked_findings_in_text(text, file:)
         # A file that is not valid UTF-8 is reported once, loudly, by the
         # backend as a read failure; nothing positional can be said about it,
         # and `lines` below would raise on the invalid bytes.
@@ -353,6 +397,83 @@ module SpecGuard
         end
 
         findings
+      end
+
+      # RSpec's example-group keywords, at the start of a line and optionally
+      # `RSpec.`-prefixed. A line matching this hosts a GROUP, not an example
+      # — and {AnnotationLookup}'s extraction can claim an annotation only
+      # from an example's own line or the comment-only line above it, so an
+      # `@intent:` written here is unreachable wherever it sits on the line.
+      GROUP_LINE =
+        /\A\s*(?:RSpec\.)?(?:describe|context|feature|shared_examples|shared_examples_for|shared_context|example_group)\b/
+
+      # A token WITH its payload opener: what the rest of the pipeline treats
+      # as an annotation on a group line. The `{` is load-bearing — a bare
+      # `@intent:` token is a {AnnotationScanner::NO_PAYLOAD} extraction
+      # failure the main pipeline already reports loudly, and (because
+      # extraction is marker-based, SPGD-8 §7) the token is ALSO found inside
+      # quoted strings: this repo's own suite carries
+      # `describe "unreachable stacked @intent: annotations"`, which is prose,
+      # not an annotation, and must not read as one. A line matching this is
+      # one the scanner captured a payload from (or began capturing one),
+      # which is the population this pass has standing to judge. The naive
+      # search inherits the scanner's string-literal limitation in the exotic
+      # direction only: a group line whose prose embeds `@intent: {` reads as
+      # annotated (a flag the pipeline independently agrees with, since
+      # extraction captures that literal too), never the reverse.
+      INTENT_WITH_PAYLOAD = /@intent:\s*\{/
+
+      # The one-liner exemption: a group line that ALSO defines an example on
+      # the same line is that example's own line, so its trailing annotation
+      # is claimed by the example and must not be flagged:
+      #
+      #   describe "one" do it("x") { } end # @intent: { ... }
+      #
+      # Two guards keep prose from reading as an example call. The match runs
+      # against the code BEFORE the `@intent:` token — the payload is English
+      # an author wrote about a behavior ("...when it's given one"), and
+      # reading `it'` there as a call exempted the exact group-line shape
+      # this pass exists to flag. And the call must sit after a block opener
+      # (`do`, `{`, `;`), because the description string is part of the code
+      # side too: `describe "the cost of rendering it" do` ends in the word
+      # `it`, and `it"` is not a call. What this heuristic still cannot see:
+      # a description string containing the literal sequence `do it` /
+      # `do specify` (or `{ it`), as in `describe "how to do it right" do`,
+      # still reads as a call and is wrongly exempted — a missed flag, and
+      # only ever a missed flag: prose can turn the exemption ON, never a
+      # real example OFF. The one-line example's own payload is never
+      # consulted, so a payload can never exempt anything.
+      EXAMPLE_ON_LINE = /(?:\bdo\b|\{|;)\s*(?:it|specify)\b/
+
+      # @param text [String] source of one file
+      # @param file [String] path to record on each Finding
+      # @return [Array<Finding>] one per example-group line carrying an
+      #   `@intent:` token, for lines that define no example of their own
+      #   ({EXAMPLE_ON_LINE}). Comment-only lines are left to
+      #   {stacked_findings_in_text}: a comment above a group is a different
+      #   shape, deliberately out of scope here (SPGD-1510 flags the group
+      #   line ITSELF).
+      def group_line_findings_in_text(text, file:)
+        # Same UTF-8 contract as the stacked pass above.
+        return [] unless text.valid_encoding?
+
+        text.lines.each_with_index.filter_map do |line, idx|
+          # Comment-only lines belong to the stacked pass; this pass reads the
+          # group line ITSELF. (A `#`-leading line could never match
+          # GROUP_LINE anyway — the guard states the division, not a filter.)
+          next if line.lstrip.start_with?("#")
+          next unless GROUP_LINE.match?(line)
+          next unless INTENT_WITH_PAYLOAD.match?(line)
+          # The exemption sees the code before the token; the payload and
+          # anything after it are prose and must never read as an example
+          # call. The token is guaranteed present (INTENT_WITH_PAYLOAD just
+          # matched), so `split` always yields the code side.
+          code = line.split("@intent:", 2).first
+          next if EXAMPLE_ON_LINE.match?(code)
+
+          Finding.new(file: file, line: idx + 1, problem: UNREACHABLE_GROUP_ANNOTATION,
+                      kind: Finding::KIND_UNREACHABLE)
+        end
       end
     end
   end

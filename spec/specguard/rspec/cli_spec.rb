@@ -592,6 +592,88 @@ RSpec.describe SpecGuard::RSpec::CLI do
     end
   end
 
+  # SPGD-1510: the group-line structural pass. An `@intent:` trailing on an
+  # example-group line (`describe`/`context`/…) is claimed by no extraction
+  # rule — a group line is no example's own and is not comment-only — so the
+  # example beneath it silently ingests unannotated while the linter counted
+  # the annotation valid and exited 0. The shapes here mirror the stacked
+  # block above: exit 1 with a FAIL at the line, the one-liner exemption,
+  # and the kind through --json.
+  describe "unreachable group-line @intent: annotations" do
+    def write_spec(dir, body, name: "order_spec.rb")
+      path = File.join(dir, name)
+      File.write(path, body)
+      path
+    end
+
+    # @intent: { entity: "CLI report", action: "flag group-line annotations", behavior: "a schema-valid trailing annotation on a describe line exits one and names that line as its own finding", layer: "unit" }
+    it "exits 1 and names the group line's file:line" do
+      Dir.mktmpdir do |dir|
+        path = write_spec(dir, <<~RUBY)
+          RSpec.describe "x" do
+            describe "a group" do # @intent: { entity: "Forms::FieldComponent", behavior: "renders the wrapper class it consumes", layer: "integration" }
+              it("works") { expect(1).to eq(1) }
+            end
+          end
+        RUBY
+
+        code = cli.run([path])
+        expect(code).to eq(1)
+        expect(out).to include("FAIL  #{path}:2")
+        expect(out).to include("unreachable annotation")
+        expect(out).to include("attach to examples, never to groups")
+      end
+    end
+
+    # @intent: { entity: "CLI report", action: "spare one-liner groups", behavior: "a one-liner group defining its example on the group line exits zero unflagged", layer: "unit" }
+    it "does not flag a one-liner group whose own line defines the example" do
+      Dir.mktmpdir do |dir|
+        path = write_spec(dir, <<~RUBY)
+          describe "one" do it("x") { expect(1).to eq(1) } end # @intent: { entity: "Order", action: "checkout", behavior: "renders the wrapper class it consumes", layer: "unit" }
+        RUBY
+
+        expect(cli.run([path])).to eq(0)
+        expect(out).not_to include("FAIL")
+      end
+    end
+
+    # @intent: { entity: "CLI report", action: "flag group-line annotations", behavior: "the group-line finding carries the unreachable kind through the json renderer at its line", layer: "unit" }
+    it "carries the unreachable kind through --json at the group line" do
+      Dir.mktmpdir do |dir|
+        path = write_spec(dir, <<~RUBY)
+          describe "a group" do # @intent: { entity: "Order", action: "checkout", behavior: "renders the wrapper class it consumes", layer: "unit" }
+            it "works" do end
+          end
+        RUBY
+
+        code = cli.run(["--json", path])
+        expect(code).to eq(1)
+
+        document = JSON.parse(out)
+        expect(document["ok"]).to be(false)
+        failed = document["findings"].select { |f| !f["ok"] }
+        expect(failed.length).to eq(1)
+        expect(failed.first["kind"]).to eq("unreachable")
+        expect(failed.first["line"]).to eq(1)
+        expect(failed.first["file"]).to eq(path)
+      end
+    end
+
+    # @intent: { entity: "CLI report", action: "flag group-line annotations", behavior: "a run over a group-line file covers it in the zero-annotation note the same as any annotated file", layer: "unit" }
+    it "keeps a group-line file out of the zero-annotation note" do
+      Dir.mktmpdir do |dir|
+        path = write_spec(dir, <<~RUBY)
+          describe "a group" do # @intent: { entity: "Order", action: "checkout", behavior: "renders the wrapper class it consumes", layer: "unit" }
+            it "works" do end
+          end
+        RUBY
+
+        cli.run([path])
+        expect(err).not_to include("carries no @intent annotations")
+      end
+    end
+  end
+
 
   describe "options" do
     # @intent: { entity: "specguard-lint options", action: "print the version", behavior: "the version flag prints the gem version and exits without linting", layer: "unit" }
