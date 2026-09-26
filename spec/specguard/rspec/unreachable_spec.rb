@@ -145,6 +145,38 @@ RSpec.describe SpecGuard::RSpec::Scanner do
       expect(findings(text)).to be_empty
     end
 
+    # @intent: { entity: "Scanner", action: "flag payload prose", behavior: "a group line whose annotation payload contains the word it's is still flagged, the exemption never reading past the token", layer: "unit" }
+    it "flags a group line whose payload prose contains it's" do
+      # The exemption reads the code BEFORE the `@intent:` token only. The
+      # payload is prose an author wrote about the behavior — `it's given
+      # one` — and reading it as an example call exempted the exact
+      # group-line shape this pass exists to flag (audit on SPGD-1510 round
+      # 1: `specguard` carries 78 real payloads matching the old whole-line
+      # form).
+      text = <<~RUBY
+        describe "a group" do # @intent: { entity: "A", behavior: "renders the wrapper class when it's given one", layer: "unit" }
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+    end
+
+    # @intent: { entity: "Scanner", action: "flag description prose", behavior: "a group line whose description string ends in the word it is still flagged, the exemption requiring a block opener before the call", layer: "unit" }
+    it "flags a group line whose description ends in the word it" do
+      # `it" do` used to read as an example call because the exemption
+      # scanned the description string too. The block-opener anchor (`do`,
+      # `{`, `;` BEFORE the call) means a description may end in the word
+      # `it` without exempting the line.
+      text = <<~RUBY
+        describe "the cost of rendering it" do # @intent: { entity: "A", behavior: "renders the thing it names", layer: "unit" }
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+    end
+
     # @intent: { entity: "Scanner", action: "spare prose tokens", behavior: "the @intent token inside a group description string carries no payload and is not flagged", layer: "unit" }
     it "does not flag an @intent: token inside a group's description string" do
       # Extraction is marker-based (SPGD-8 §7), so the token is found inside

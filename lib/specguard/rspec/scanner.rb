@@ -429,15 +429,21 @@ module SpecGuard
       #
       #   describe "one" do it("x") { } end # @intent: { ... }
       #
-      # The call shapes a one-line example can take — `it(`, `it "`, `it '`,
-      # `it {`, `it do` (and `specify` likewise) — are what this matches; a
-      # bare word-boundary `it` alone would exempt a line whose STRING
-      # contains the word ("describe 'can it fail' do"), which is not an
-      # example. Like every lexical pass here this is still a heuristic, and
-      # it inherits the scanner's documented string-literal limitation in the
-      # exotic direction: a group line whose description embeds `it do` reads
-      # as exempt (a missed flag), never the reverse.
-      EXAMPLE_ON_LINE = /\b(?:it|specify)\b\s*(?:[({"']|do\b)/
+      # Two guards keep prose from reading as an example call. The match runs
+      # against the code BEFORE the `@intent:` token — the payload is English
+      # an author wrote about a behavior ("...when it's given one"), and
+      # reading `it'` there as a call exempted the exact group-line shape
+      # this pass exists to flag. And the call must sit after a block opener
+      # (`do`, `{`, `;`), because the description string is part of the code
+      # side too: `describe "the cost of rendering it" do` ends in the word
+      # `it`, and `it"` is not a call. What this heuristic still cannot see:
+      # a description string containing the literal sequence `do it` /
+      # `do specify` (or `{ it`), as in `describe "how to do it right" do`,
+      # still reads as a call and is wrongly exempted — a missed flag, and
+      # only ever a missed flag: prose can turn the exemption ON, never a
+      # real example OFF. The one-line example's own payload is never
+      # consulted, so a payload can never exempt anything.
+      EXAMPLE_ON_LINE = /(?:\bdo\b|\{|;)\s*(?:it|specify)\b/
 
       # @param text [String] source of one file
       # @param file [String] path to record on each Finding
@@ -458,7 +464,12 @@ module SpecGuard
           next if line.lstrip.start_with?("#")
           next unless GROUP_LINE.match?(line)
           next unless INTENT_WITH_PAYLOAD.match?(line)
-          next if EXAMPLE_ON_LINE.match?(line)
+          # The exemption sees the code before the token; the payload and
+          # anything after it are prose and must never read as an example
+          # call. The token is guaranteed present (INTENT_WITH_PAYLOAD just
+          # matched), so `split` always yields the code side.
+          code = line.split("@intent:", 2).first
+          next if EXAMPLE_ON_LINE.match?(code)
 
           Finding.new(file: file, line: idx + 1, problem: UNREACHABLE_GROUP_ANNOTATION,
                       kind: Finding::KIND_UNREACHABLE)
