@@ -1421,6 +1421,83 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
       end
     end
 
+    # The torn-append shape. The reporter appends without a lock, so a drain
+    # can read a queue whose final line was never terminated — a whole run
+    # with no trailing newline is the ordinary survivor of a formatter killed
+    # mid-append. Every other queue fixture in this block ends in "\n"; this
+    # pair pins the one input shape the tail-carry above cannot reach, where
+    # the READ itself is unterminated. The rebuild is a byte operation on
+    # purpose, and both plausible "fixes" corrupt the run the drain exists to
+    # protect: re-terminating the kept bytes splits the carried line in two,
+    # and dropping the unterminated remainder deletes an undelivered run
+    # outright.
+    # @intent: { entity: "specguard-ingest --drain", action: "drain an unterminated queue", behavior: "an unterminated last line the drain leaves behind survives byte for byte, with no newline invented", layer: "unit" }
+    it "keeps an unterminated last line byte for byte when the drain leaves it behind" do
+      path = File.join(@dir, "torn.jsonl")
+      File.binwrite(path, "#{JSON.generate(run_payload(ci_run_id: 'a'))}\n#{JSON.generate(run_payload(ci_run_id: 'b'))}")
+
+      StubIngestEndpoint.run(responses: [{}, outage]) do |server|
+        code = drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])
+
+        expect(code).to eq(2)
+        expect(server.requests.length).to eq(2)
+        expect(File.binread(path)).to eq(JSON.generate(run_payload(ci_run_id: "b")))
+        expect(out).to include("; 1 accepted line removed from #{path} — the 1 line left is now numbered from 1")
+      end
+    end
+
+    # The other half of the pair, and the one a separator-join rewrite fails:
+    # removing an UNTERMINATED last line must not consume the preceding
+    # line's own newline — the rewritten queue stays line-oriented, and the
+    # survivor still parses as the run it is.
+    # @intent: { entity: "specguard-ingest --drain", action: "drain an unterminated queue", behavior: "removing an unterminated last line keeps the preceding line's newline so the rewritten queue stays line-oriented", layer: "unit" }
+    it "keeps the preceding newline when the drain removes an unterminated last line" do
+      path = File.join(@dir, "torn.jsonl")
+      File.binwrite(path, "#{JSON.generate(run_payload(ci_run_id: 'a'))}\n#{JSON.generate(run_payload(ci_run_id: 'b'))}")
+
+      StubIngestEndpoint.run(responses: [outage, {}]) do |server|
+        code = drained_cli(server, stdout, stderr, queue: path).run(["--drain", path])
+
+        expect(code).to eq(2)
+        expect(server.requests.length).to eq(2)
+        expect(File.binread(path)).to eq("#{JSON.generate(run_payload(ci_run_id: 'a'))}\n")
+        expect(out).to include("; 1 accepted line removed from #{path} — the 1 line left is now numbered from 1")
+      end
+    end
+
+    # The torn-append sibling of the tail-carry above: there the read ended on
+    # a whole line and the append added a new one; here the read caught the
+    # queue mid-line — only the first half of a run was on disk — and the
+    # second half plus the newline arrives while the deliveries run. The
+    # rewrite must rejoin the halves into the one line the read had torn:
+    # kept bytes split from the appended tail leave two fragments where one
+    # run was, and neither fragment parses.
+    # @intent: { entity: "specguard-ingest --drain", action: "carry concurrent appends", behavior: "a line the drain read in halves is rewritten whole once its second half is appended during the deliveries", layer: "unit" }
+    it "rejoins a line whose second half was appended while the deliveries ran" do
+      path = sink(run_payload(ci_run_id: "a"), run_payload(ci_run_id: "b"))
+      whole = JSON.generate(run_payload(ci_run_id: "c"))
+      half = whole.length / 2
+      File.open(path, "a") { |file| file.write(whole.byteslice(0, half)) }
+
+      StubIngestEndpoint.run do |server|
+        cli = drained_cli(server, stdout, stderr, queue: path)
+        cli.define_singleton_method(:deliver_line) do |number, text, transport|
+          result = super(number, text, transport)
+          # After the first delivery: `read_source` is behind it, the rewrite
+          # is ahead of it — the same window the tail-carry above uses, but
+          # the bytes landing are the rest of the very line the read left torn.
+          File.open(path, "a") { |file| file.write("#{whole.byteslice(half, whole.length)}\n") } if number == 1
+          result
+        end
+
+        expect(cli.run(["--drain", path])).to eq(2)
+        expect(server.requests.length).to eq(2)
+        expect(File.binread(path)).to eq("#{whole}\n")
+        expect(out).to include("line 3: unparseable")
+        expect(out).to include("; 2 accepted lines removed from #{path} — the 1 line left is now numbered from 1")
+      end
+    end
+
     # Guards, both exit 2 with the file byte-identical — a refusal that moved
     # the file would not be a refusal.
     # @intent: { entity: "specguard-ingest --drain", action: "refuse misuse", behavior: "combining the drain with a listing exits two and leaves the file untouched", layer: "unit" }
