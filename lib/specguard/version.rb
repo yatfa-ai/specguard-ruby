@@ -7,5 +7,5 @@
 # framework-scoped version constant a lie, so the number moved here and the
 # rspec module now points at it for back-compat.
 module SpecGuard
-  VERSION = "0.3.25"
+  VERSION = "0.3.26"
 end
