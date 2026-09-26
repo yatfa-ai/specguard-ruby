@@ -23,6 +23,11 @@ RSpec.describe SpecGuard::RSpec::CLI do
   def out = stdout.string
   def err = stderr.string
 
+  def git!(*args, chdir:)
+    _out, e, status = Open3.capture3("git", *args, chdir: chdir)
+    raise "git #{args.join(' ')} failed: #{e}" unless status.success?
+  end
+
   # The exit contract itself lives in spec/specguard/rspec/exit_contract_spec.rb.
   # What is left here is the CLI's *reporting*: which stream each kind of
   # message goes to, and whether it tells the truth about what was checked.
@@ -126,11 +131,6 @@ RSpec.describe SpecGuard::RSpec::CLI do
           "all in dependency or build directories"
         )
       end
-    end
-
-    def git!(*args, chdir:)
-      _out, e, status = Open3.capture3("git", *args, chdir: chdir)
-      raise "git #{args.join(' ')} failed: #{e}" unless status.success?
     end
 
     # SPGD-1119: files can reach the selection through the untracked leg, and
@@ -977,10 +977,6 @@ RSpec.describe SpecGuard::RSpec::CLI do
     # is a report about the CODE, not a reason to drop the one sentence that
     # says what was selected.
     describe "stderr is untouched" do
-      def git!(*args, chdir:)
-        _out, e, status = Open3.capture3("git", *args, chdir: chdir)
-        raise "git #{args.join(' ')} failed: #{e}" unless status.success?
-      end
 
       # @intent: { entity: "CLI json renderer", action: "leave stderr intact", behavior: "json mode writes exactly one provenance line naming the implementation plus the selection line naming what was checked", layer: "unit" }
       it "still writes exactly one provenance line naming the implementation" do
@@ -1377,24 +1373,20 @@ RSpec.describe SpecGuard::RSpec::CLI do
     # *_spec.rb" when a spec file demonstrably had changed. A confidently wrong
     # reason is worse than a quiet one, because a human reading it stops
     # looking.
-    def git(*args, chdir:)
-      _out, e, status = Open3.capture3("git", *args, chdir: chdir)
-      raise "git #{args.join(' ')} failed: #{e}" unless status.success?
-    end
 
     def repo_with_nested_spec
       dir = Dir.mktmpdir("specguard-cli")
-      git("init", "-q", "--initial-branch=main", chdir: dir)
-      git("config", "user.email", "t@example.com", chdir: dir)
-      git("config", "user.name", "T", chdir: dir)
+      git!("init", "-q", "--initial-branch=main", chdir: dir)
+      git!("config", "user.email", "t@example.com", chdir: dir)
+      git!("config", "user.name", "T", chdir: dir)
       File.write(File.join(dir, "README.md"), "hello\n")
-      git("add", "-A", chdir: dir)
-      git("commit", "-q", "-m", "base", chdir: dir)
-      git("checkout", "-q", "-b", "feature", chdir: dir)
+      git!("add", "-A", chdir: dir)
+      git!("commit", "-q", "-m", "base", chdir: dir)
+      git!("checkout", "-q", "-b", "feature", chdir: dir)
       FileUtils.mkdir_p(File.join(dir, "other/spec"))
       File.write(File.join(dir, "other/spec/sibling_spec.rb"), "# a spec\n")
-      git("add", "-A", chdir: dir)
-      git("commit", "-q", "-m", "add a spec", chdir: dir)
+      git!("add", "-A", chdir: dir)
+      git!("commit", "-q", "-m", "add a spec", chdir: dir)
       FileUtils.mkdir_p(File.join(dir, "sub"))
       yield dir
     ensure
@@ -1434,8 +1426,8 @@ RSpec.describe SpecGuard::RSpec::CLI do
         # `--diff-filter=d` and is counted as a changed spec) but `File.file?`
         # refuses it, which is the `unreadable` branch.
         File.symlink("missing_target.rb", File.join(dir, "sub/broken_spec.rb"))
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "add a broken symlink spec", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "add a broken symlink spec", chdir: dir)
 
         Dir.chdir(File.join(dir, "sub")) { cli.run(["--changed"]) }
       end
@@ -1471,8 +1463,8 @@ RSpec.describe SpecGuard::RSpec::CLI do
         vendored = File.join(dir, "sub/vendor/bundle/spec")
         FileUtils.mkdir_p(vendored)
         File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "add a broken symlink spec and a vendored spec", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "add a broken symlink spec and a vendored spec", chdir: dir)
 
         Dir.chdir(File.join(dir, "sub")) { cli.run(["--changed"]) }
       end
@@ -1496,14 +1488,14 @@ RSpec.describe SpecGuard::RSpec::CLI do
     it "names the unreadable file alongside the fence instead of claiming every match was fenced" do
       base = nil
       Dir.mktmpdir do |dir|
-        git("init", "-q", "--initial-branch=main", chdir: dir)
-        git("config", "user.email", "t@example.com", chdir: dir)
-        git("config", "user.name", "T", chdir: dir)
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
         FileUtils.mkdir_p(File.join(dir, "spec"))
         File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "base", chdir: dir)
-        git("checkout", "-q", "-b", "feature", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
         # One dangling symlink (the `unreadable` branch) and one vendored
         # spec (the fence branch), both under the repo root so
         # `outside_root` stays at zero — this is the two-cause arm the
@@ -1512,8 +1504,8 @@ RSpec.describe SpecGuard::RSpec::CLI do
         vendored = File.join(dir, "vendor/bundle/ruby/3.3.0/gems/rspec-core-3.13/spec")
         FileUtils.mkdir_p(vendored)
         File.write(File.join(vendored, "vendored_spec.rb"), "# vendored\n")
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "add a broken symlink spec and a vendored spec", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "add a broken symlink spec and a vendored spec", chdir: dir)
 
         base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
         Dir.chdir(dir) { cli.run(["--changed"]) }
@@ -1540,14 +1532,14 @@ RSpec.describe SpecGuard::RSpec::CLI do
     it "carries each cause's own count when the unreadable files and the fence emptied the selection" do
       base = nil
       Dir.mktmpdir do |dir|
-        git("init", "-q", "--initial-branch=main", chdir: dir)
-        git("config", "user.email", "t@example.com", chdir: dir)
-        git("config", "user.name", "T", chdir: dir)
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
         FileUtils.mkdir_p(File.join(dir, "spec"))
         File.write(File.join(dir, "spec/base_spec.rb"), "# base\n")
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "base", chdir: dir)
-        git("checkout", "-q", "-b", "feature", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
         # Two dangling symlinks (the `unreadable` branch) and three vendored
         # specs (the fence branch), all under the repo root so
         # `outside_root` stays at zero — the two-cause arm, with counts too
@@ -1557,8 +1549,8 @@ RSpec.describe SpecGuard::RSpec::CLI do
         vendored = File.join(dir, "vendor/bundle/spec")
         FileUtils.mkdir_p(vendored)
         3.times { |i| File.write(File.join(vendored, "vendored_#{i}_spec.rb"), "# vendored\n") }
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "add broken symlink specs and vendored specs", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "add broken symlink specs and vendored specs", chdir: dir)
 
         base = Open3.capture3("git", "merge-base", "main", "HEAD", chdir: dir).first.strip
         Dir.chdir(dir) { cli.run(["--changed"]) }
@@ -1592,16 +1584,16 @@ RSpec.describe SpecGuard::RSpec::CLI do
     it "names both conventions when nothing in the diff matched either" do
       dir = Dir.mktmpdir("specguard-cli")
       begin
-        git("init", "-q", "--initial-branch=main", chdir: dir)
-        git("config", "user.email", "t@example.com", chdir: dir)
-        git("config", "user.name", "T", chdir: dir)
+        git!("init", "-q", "--initial-branch=main", chdir: dir)
+        git!("config", "user.email", "t@example.com", chdir: dir)
+        git!("config", "user.name", "T", chdir: dir)
         File.write(File.join(dir, "README.md"), "hello\n")
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "base", chdir: dir)
-        git("checkout", "-q", "-b", "feature", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "base", chdir: dir)
+        git!("checkout", "-q", "-b", "feature", chdir: dir)
         File.write(File.join(dir, "README.md"), "edited\n")
-        git("add", "-A", chdir: dir)
-        git("commit", "-q", "-m", "docs only", chdir: dir)
+        git!("add", "-A", chdir: dir)
+        git!("commit", "-q", "-m", "docs only", chdir: dir)
 
         Dir.chdir(dir) { cli.run(["--changed"]) }
       ensure
