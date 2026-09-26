@@ -38,12 +38,16 @@ module SpecGuard
     # `read` kind) and still reports it as `FAIL` with exit 1.
     #
     # `Finding::KIND_UNREACHABLE` — an annotation that is well-formed in
-    # isolation but stacked above another comment-form `@intent:` line, so
-    # the one-line lookback (SPGD-12 §2) never claims it — is also reported
-    # as a failure, and therefore also exits 1. Nothing about it is
+    # isolation but can never be extracted, so the one-line lookback
+    # (SPGD-12 §2) never claims it — is also reported as a failure, and
+    # therefore also exits 1. Two shapes reach this kind: a comment-form
+    # `@intent:` stacked above another comment-form `@intent:` line (SPGD-900),
+    # and an `@intent:` trailing on an example-group line, which is no
+    # example's own and not comment-only (SPGD-1510). Nothing about either is
     # malformed; the contract is dead metadata, counted by the linter and
-    # discarded by extraction, and the structural pass that flags it
-    # (SPGD-900) reports it loudly rather than letting it pass as clean.
+    # discarded by extraction, and the structural pass that flags them
+    # (SPGD-900, SPGD-1510) reports it loudly rather than letting it pass as
+    # clean.
     module Linter
       # One annotation's verdict. `problem` is set when discovery could not
       # produce an intent at all; `reasons` when the schema rejected one.
