@@ -162,6 +162,24 @@ RSpec.describe SpecGuard::RSpec::Scanner do
       expect(findings(text).map(&:line)).to eq([1])
     end
 
+    # @intent: { entity: "Scanner", action: "flag payload calls", behavior: "a group line whose payload contains the sequence ; it( is still flagged, the block-opener anchor rejecting payloads on its own so only the token boundary can exempt the line", layer: "unit" }
+    it "flags a group line whose payload contains ; it(" do
+      # The only payload class that actually exercises guard Y: a payload
+      # carrying the literal `; it(` sequence, which guard X accepts INSIDE a
+      # code side. If the exemption ever reads past the `@intent:` token
+      # again (guard Y violated, e.g. code = whole line), EXAMPLE_ON_LINE
+      # matches the payload, the line is wrongly exempted and this example
+      # fails with 0 findings — unlike the `it's` payload above, which stays
+      # green under that same violation.
+      text = <<~RUBY
+        describe "a group" do # @intent: { entity: "A", behavior: "no-op; it( is never called", layer: "unit" }
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+    end
+
     # @intent: { entity: "Scanner", action: "flag description prose", behavior: "a group line whose description string ends in the word it is still flagged, the exemption requiring a block opener before the call", layer: "unit" }
     it "flags a group line whose description ends in the word it" do
       # `it" do` used to read as an example call because the exemption
