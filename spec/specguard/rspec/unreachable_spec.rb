@@ -312,6 +312,17 @@ RSpec.describe SpecGuard::RSpec::Scanner do
       expect(findings(text)).to be_empty
     end
 
+    # @intent: { entity: "Scanner", action: "spare code interleaves", behavior: "an annotation, a code line directly beneath it, then an example is not flagged because only a blank or ordinary comment line may interleave", layer: "unit" }
+    it "does not flag a code line as the interleave" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        x = 1
+        it "works" do end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
     # @intent: { entity: "Scanner", action: "spare two-line windows", behavior: "an annotation followed by two blank lines then an example is not flagged because the window is exactly one intervening line", layer: "unit" }
     it "does not flag two intervening blank lines" do
       text = "# @intent: { entity: \"A\" }\n\n\nit \"works\" do end\n"
