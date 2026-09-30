@@ -49,7 +49,7 @@ module SpecGuard
       KIND_SCHEMA = :schema
 
       # The annotation is well-formed in isolation but can never be EXTRACTED.
-      # Two shapes, both dead the moment they are written:
+      # Three shapes, all dead the moment they are written:
       #
       #   * a comment-form `@intent:` stacked above another comment-form
       #     `@intent:` line, so the one-line lookback (SPGD-12 §2 —
@@ -58,9 +58,12 @@ module SpecGuard
       #   * an `@intent:` trailing on an example-group line
       #     ({Scanner::GROUP_LINE} — SPGD-1510): a group line is no example's
       #     own and is not comment-only, so no extraction rule can ever reach
-      #     it, and the example beneath it silently ingests unannotated.
+      #     it, and the example beneath it silently ingests unannotated;
+      #   * a comment-form `@intent:` run separated from its example by ONE
+      #     blank or ordinary comment line (SPGD-1554): the one-line lookback
+      #     reads only that interleave, so the whole run is out of reach.
       #
-      # Either way the contract is dead metadata: counted by the linter,
+      # Whichever shape, the contract is dead metadata: counted by the linter,
       # discarded by extraction. Produced by {Scanner}'s structural pass, not
       # by {AnnotationScanner} — each annotation is scanned in isolation
       # there, which is exactly why these defects are invisible to it.
