@@ -592,6 +592,46 @@ RSpec.describe SpecGuard::RSpec::CLI do
     end
   end
 
+  # SPGD-1554: the separated-annotation structural pass. A comment-form
+  # `@intent:` separated from its `it` by ONE blank/ordinary comment line is
+  # out of the one-line lookback's reach (SPGD-12 §2): dead metadata the
+  # linter previously counted as valid and exited 0 over.
+  describe "unreachable separated @intent: annotations" do
+    def write_spec(dir, body, name: "order_spec.rb")
+      path = File.join(dir, name)
+      File.write(path, body)
+      path
+    end
+
+    [["blank line", ""], ["ordinary comment line", "# rubocop:disable Style/Foo\n"]].each do |label, interleave|
+      # @intent: { entity: "CLI report", action: "flag separated annotations", behavior: "an annotation separated from its example by one interleave line exits one and names the annotation line as a FAIL row", layer: "unit" }
+      it "exits 1 with a FAIL row at the annotation line for a #{label} interleave" do
+        Dir.mktmpdir do |dir|
+          path = write_spec(dir, "# @intent: { entity: \"Order\", action: \"checkout\", behavior: \"decrements the order stock\", layer: \"request\" }\n" \
+                                 "#{interleave.empty? ? "\n" : interleave}" \
+                                 "it \"decrements stock\" do end\n")
+
+          expect(cli.run([path])).to eq(1)
+          expect(out).to include("FAIL  #{path}:1")
+          expect(out).to include("unreachable annotation")
+        end
+      end
+    end
+
+    # @intent: { entity: "CLI report", action: "flag separated annotations", behavior: "the separated finding carries the unreachable kind through the json renderer at the annotation line", layer: "unit" }
+    it "carries the unreachable kind through --json and still exits 1" do
+      Dir.mktmpdir do |dir|
+        path = write_spec(dir, "# @intent: { entity: \"Order\", action: \"checkout\", behavior: \"decrements the order stock\", layer: \"request\" }\n\nit \"works\" do end\n")
+
+        expect(cli.run(["--json", path])).to eq(1)
+
+        failed = JSON.parse(out)["findings"].reject { |f| f["ok"] }
+        expect(failed.map { |f| f["kind"] }).to eq(["unreachable"])
+        expect(failed.first["line"]).to eq(1)
+      end
+    end
+  end
+
   # SPGD-1510: the group-line structural pass. An `@intent:` trailing on an
   # example-group line (`describe`/`context`/…) is claimed by no extraction
   # rule — a group line is no example's own and is not comment-only — so the

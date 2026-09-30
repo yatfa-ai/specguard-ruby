@@ -249,6 +249,138 @@ RSpec.describe SpecGuard::RSpec::Scanner do
     end
   end
 
+  describe ".unreachable_findings_in_text (SPGD-1554: the separated-annotation pass)" do
+    def findings(text)
+      described_class.unreachable_findings_in_text(text, file: "order_spec.rb")
+    end
+
+    # @intent: { entity: "Scanner", action: "detect separated annotations", behavior: "a comment annotation, one blank line, then an example is flagged on the annotation line with kind unreachable", layer: "unit" }
+    it "flags an @intent: comment separated from its example by one blank line" do
+      text = <<~RUBY
+        # @intent: { entity: "Order", behavior: "decrements stock" }
+
+        it "decrements stock" do end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+      expect(findings(text).first.kind).to eq(SpecGuard::RSpec::Finding::KIND_UNREACHABLE)
+      expect(findings(text).first.problem).to include("separated from its example")
+    end
+
+    # @intent: { entity: "Scanner", action: "detect separated annotations", behavior: "a comment annotation, one ordinary comment line, then an example is flagged the same as the blank interleave", layer: "unit" }
+    it "flags an @intent: comment separated from its example by one ordinary comment line" do
+      text = <<~RUBY
+        # @intent: { entity: "Order", behavior: "decrements stock" }
+        # rubocop:disable Style/Foo
+        it "decrements stock" do end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+    end
+
+    # @intent: { entity: "Scanner", action: "spare the direct form", behavior: "an annotation directly above its example is not flagged by the separated pass", layer: "unit" }
+    it "does not flag the direct form" do
+      text = <<~RUBY
+        # @intent: { entity: "Order", behavior: "decrements stock" }
+        it "decrements stock" do end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "not double-flag stacked pairs", behavior: "a stacked pair directly above an example yields exactly the upper-line flag from the stacked pass, not a doubled finding", layer: "unit" }
+    it "does not double-flag a stacked pair above its example" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        # @intent: { entity: "B" }
+        it "works" do end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+      expect(findings(text).first.problem).to eq(described_class::UNREACHABLE_ANNOTATION)
+    end
+
+    # @intent: { entity: "Scanner", action: "spare code interleaves", behavior: "an annotation, a blank line, a code line, then an example is not flagged because a code interleave is out of scope", layer: "unit" }
+    it "does not flag a code-line interleave beyond the one-line window" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+
+        x = 1
+        it "works" do end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "spare code interleaves", behavior: "an annotation, a code line directly beneath it, then an example is not flagged because only a blank or ordinary comment line may interleave", layer: "unit" }
+    it "does not flag a code line as the interleave" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        x = 1
+        it "works" do end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "spare two-line windows", behavior: "an annotation followed by two blank lines then an example is not flagged because the window is exactly one intervening line", layer: "unit" }
+    it "does not flag two intervening blank lines" do
+      text = "# @intent: { entity: \"A\" }\n\n\nit \"works\" do end\n"
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "flag every run line", behavior: "a run of two annotations then a blank then an example flags both lines, the last included, unlike the stacked pass", layer: "unit" }
+    it "flags EVERY line of a multi-line run, the last included" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        # @intent: { entity: "B" }
+
+        it "works" do end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1, 2])
+      expect(findings(text).map(&:problem).uniq).to eq([described_class::UNREACHABLE_SEPARATED_ANNOTATION])
+    end
+
+    # @intent: { entity: "Scanner", action: "defer group targets", behavior: "an annotation, a blank line, then a describe line is not flagged because describe is not an example line", layer: "unit" }
+    it "does not flag a separated annotation whose target is a describe line" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+
+        describe "a group" do
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "respect file bounds", behavior: "an annotation followed by a blank line at end of file is not flagged", layer: "unit" }
+    it "does not flag an annotation plus blank line at end of file" do
+      expect(findings("# @intent: { entity: \"A\" }\n\n")).to be_empty
+      expect(findings("# @intent: { entity: \"A\" }\n")).to be_empty
+      expect(findings("# @intent: { entity: \"A\" }")).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "merge the three passes", behavior: "separated, stacked and group-line findings in one file come back merged in line order", layer: "unit" }
+    it "merges with the other passes in line order" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+
+        it "one" do end
+        # @intent: { entity: "B" }
+        # @intent: { entity: "C" }
+        it "two" do end
+        context "g" do # @intent: { entity: "D", behavior: "renders the thing it names", layer: "unit" }
+          it "three" do end
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1, 4, 7])
+    end
+  end
+
   describe ".unreachable_findings_in_file" do
     # @intent: { entity: "Scanner", action: "read a missing file", behavior: "asking for unreachable findings on a path that does not exist returns an empty list rather than raising", layer: "unit" }
     it "contributes nothing for a file that cannot be read" do

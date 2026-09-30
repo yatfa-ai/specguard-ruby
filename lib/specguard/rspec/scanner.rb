@@ -261,7 +261,7 @@ module SpecGuard
       # ({AnnotationLookup}, SPGD-12 §2) is positional: an annotation reaches
       # an example only through its own line (the trailing form, and only when
       # that line IS the example's) or through the comment-form line
-      # IMMEDIATELY ABOVE it. Two shapes fall outside both and are dead the
+      # IMMEDIATELY ABOVE it. Three shapes fall outside both and are dead the
       # moment they are written — silently discarded by extraction while this
       # pipeline counts them as valid annotations and the run exits 0:
       #
@@ -276,8 +276,14 @@ module SpecGuard
       #     ever claim it — the example beneath it silently ingests as
       #     unannotated. A describe insertion that swallowed a newline is how
       #     the shape is born.
+      #   * the SEPARATED annotation (SPGD-1554, ported from specguard-ts
+      #     SPGD-1550): a comment-form `@intent:` run followed by exactly ONE
+      #     blank line or ordinary (non-`@intent:`) comment line and THEN an
+      #     example. The one-line lookback reads only the line directly above
+      #     the example, which is the interleave — so the annotation is out of
+      #     reach and every line of the run is dead.
       #
-      # Both are reported loudly, not skipped — the same stance
+      # All three are reported loudly, not skipped — the same stance
       # {AnnotationScanner} takes for NO_PAYLOAD.
       #
       # A comment-form annotation line is a comment-only line
@@ -323,6 +329,13 @@ module SpecGuard
         "claim it. Move it onto its example's `it` line, or to the comment line directly " \
         "above that `it`"
 
+      UNREACHABLE_SEPARATED_ANNOTATION =
+        "unreachable annotation: this @intent: is separated from its example by an " \
+        "intervening comment or blank line, and the one-line lookback (SPGD-12 §2) claims " \
+        "only the line directly above the example — so this annotation is silently " \
+        "discarded at extraction. Move it directly above the example (or merge it into " \
+        "the line that is)"
+
       # A comment-only line carrying an `@intent:` token — the only form an
       # example on the NEXT line may claim ({AnnotationLookup::COMMENT_LINE}).
       COMMENT_INTENT_LINE = /\A\s*#.*@intent:/
@@ -337,20 +350,34 @@ module SpecGuard
       # spec/fixtures/): there is no lookback there to silently discard
       # anything, so there is nothing to report. The defects this pass exists
       # for are annotations an author believed were attached to a real
-      # example: stacked lines above it (SPGD-897), and the trailing form on
-      # a group line directly above it (SPGD-1510).
+      # example: stacked lines above it (SPGD-897), the trailing form on
+      # a group line directly above it (SPGD-1510), and a comment-form run
+      # separated from it by one blank/comment line (SPGD-1554).
       EXAMPLE_LINE = /\A\s*(?:it|specify)\b/
+
+      # A blank (whitespace-only) line — one of the two interleaves the
+      # separated pass reads. `\n` is whitespace, so a `text.lines` element
+      # that is only its newline matches.
+      BLANK_LINE = /\A\s*\z/
+
+      # A comment-only line (`#`-leading). The separated pass reads it as the
+      # interleave only when it carries no `@intent:` token (a comment-form
+      # `@intent:` line is part of the run itself, never an interleave).
+      COMMENT_ONLY_LINE = /\A\s*#/
 
       # @param text [String] source of one file
       # @param file [String] path to record on each Finding
       # @return [Array<Finding>] the structural findings for one file, in line
       #   order: one per comment-form `@intent:` line in a stacked run (see
-      #   {stacked_findings_in_text}) plus one per group line carrying the
-      #   trailing form (see {group_line_findings_in_text}). The two passes
-      #   are disjoint by construction — one reads only comment-only lines,
-      #   the other only lines that are not — so the merge cannot double-flag
-      #   a line, and the sort restores the file-then-line order
-      #   {unreachable_findings} promises.
+      #   {stacked_findings_in_text}), one per line of a separated run (see
+      #   {separated_findings_in_text}) plus one per group line carrying the
+      #   trailing form (see {group_line_findings_in_text}). The three passes
+      #   are disjoint by construction: the stacked pass needs an example
+      #   line directly after the run, the separated pass needs a blank or
+      #   comment-only line there (one slot cannot be both), and the group
+      #   pass reads only lines that are not comment-only — so the merge
+      #   cannot double-flag a line, and the sort restores the file-then-line
+      #   order {unreachable_findings} promises.
       def unreachable_findings_in_text(text, file:)
         # A file that is not valid UTF-8 is reported once, loudly, by the
         # backend as a read failure; nothing positional can be said about it,
@@ -358,6 +385,7 @@ module SpecGuard
         return [] unless text.valid_encoding?
 
         (stacked_findings_in_text(text, file: file) +
+         separated_findings_in_text(text, file: file) +
          group_line_findings_in_text(text, file: file)).sort_by(&:line)
       end
 
@@ -393,6 +421,52 @@ module SpecGuard
               findings << Finding.new(file: file, line: j + 1, problem: UNREACHABLE_ANNOTATION,
                                       kind: Finding::KIND_UNREACHABLE)
             end
+          end
+        end
+
+        findings
+      end
+
+      # @param text [String] source of one file
+      # @param file [String] path to record on each Finding
+      # @return [Array<Finding>] one per comment-form `@intent:` line of a
+      #   SEPARATED run — a maximal run of consecutive comment-form `@intent:`
+      #   lines whose following line (the interleave) is blank or a comment
+      #   without an `@intent:` token AND whose line after that is an example
+      #   ({EXAMPLE_LINE}). The one-line lookback reads only the interleave,
+      #   so NOTHING in the run is claimed: every line is flagged, the run's
+      #   last line included — the discriminating difference from
+      #   {stacked_findings_in_text}, which spares the last line. The window
+      #   is exactly one line: a second interleave, a code interleave, a
+      #   `describe` target or a run at end of file is not flagged.
+      def separated_findings_in_text(text, file:)
+        # Same UTF-8 contract as the stacked pass above.
+        return [] unless text.valid_encoding?
+
+        lines = text.lines
+        i = 0
+        findings = []
+
+        while i < lines.length
+          unless COMMENT_INTENT_LINE.match?(lines[i])
+            i += 1
+            next
+          end
+
+          run_start = i
+          i += 1 while i < lines.length && COMMENT_INTENT_LINE.match?(lines[i])
+          run_end = i # exclusive; lines[run_end] is the interleave candidate
+
+          between = lines[run_end]
+          example = lines[run_end + 1]
+          next if between.nil? || example.nil?
+          next unless BLANK_LINE.match?(between) ||
+                      (COMMENT_ONLY_LINE.match?(between) && !COMMENT_INTENT_LINE.match?(between))
+          next unless EXAMPLE_LINE.match?(example)
+
+          (run_start...run_end).each do |j|
+            findings << Finding.new(file: file, line: j + 1, problem: UNREACHABLE_SEPARATED_ANNOTATION,
+                                    kind: Finding::KIND_UNREACHABLE)
           end
         end
 
@@ -450,9 +524,9 @@ module SpecGuard
       # @return [Array<Finding>] one per example-group line carrying an
       #   `@intent:` token, for lines that define no example of their own
       #   ({EXAMPLE_ON_LINE}). Comment-only lines are left to
-      #   {stacked_findings_in_text}: a comment above a group is a different
-      #   shape, deliberately out of scope here (SPGD-1510 flags the group
-      #   line ITSELF).
+      #   {stacked_findings_in_text} and {separated_findings_in_text}: a
+      #   comment above a group is a different shape, deliberately out of
+      #   scope here (SPGD-1510 flags the group line ITSELF).
       def group_line_findings_in_text(text, file:)
         # Same UTF-8 contract as the stacked pass above.
         return [] unless text.valid_encoding?
