@@ -261,7 +261,7 @@ module SpecGuard
       # ({AnnotationLookup}, SPGD-12 §2) is positional: an annotation reaches
       # an example only through its own line (the trailing form, and only when
       # that line IS the example's) or through the comment-form line
-      # IMMEDIATELY ABOVE it. Three shapes fall outside both and are dead the
+      # IMMEDIATELY ABOVE it. Four shapes fall outside both and are dead the
       # moment they are written — silently discarded by extraction while this
       # pipeline counts them as valid annotations and the run exits 0:
       #
@@ -283,7 +283,15 @@ module SpecGuard
       #     the example, which is the interleave — so the annotation is out of
       #     reach and every line of the run is dead.
       #
-      # All three are reported loudly, not skipped — the same stance
+      #   * the SHADOWED annotation (SPGD-1560, ported from specguard-ts
+      #     SPGD-1556): a comment-form `@intent:` run directly above an example
+      #     whose OWN line also carries a trailing `@intent: {`. Extraction is
+      #     own-line-first ({AnnotationLookup::Index#intent_for} returns the
+      #     example's own annotation before it ever consults the line above),
+      #     so the comment is shadowed and its LAST line is dead. (Any earlier
+      #     lines of the run are the stacked arm's.)
+      #
+      # All four are reported loudly, not skipped — the same stance
       # {AnnotationScanner} takes for NO_PAYLOAD.
       #
       # A comment-form annotation line is a comment-only line
@@ -336,6 +344,12 @@ module SpecGuard
         "discarded at extraction. Move it directly above the example (or merge it into " \
         "the line that is)"
 
+      UNREACHABLE_SHADOWED_ANNOTATION =
+        "unreachable annotation: the example directly below carries its own trailing @intent:, " \
+        "and extraction is own-line-first (SPGD-12 §2), so this comment-form annotation is " \
+        "shadowed and silently discarded. Delete this comment, or merge it into the trailing " \
+        "payload"
+
       # A comment-only line carrying an `@intent:` token — the only form an
       # example on the NEXT line may claim ({AnnotationLookup::COMMENT_LINE}).
       COMMENT_INTENT_LINE = /\A\s*#.*@intent:/
@@ -370,14 +384,18 @@ module SpecGuard
       # @return [Array<Finding>] the structural findings for one file, in line
       #   order: one per comment-form `@intent:` line in a stacked run (see
       #   {stacked_findings_in_text}), one per line of a separated run (see
-      #   {separated_findings_in_text}) plus one per group line carrying the
-      #   trailing form (see {group_line_findings_in_text}). The three passes
-      #   are disjoint by construction: the stacked pass needs an example
-      #   line directly after the run, the separated pass needs a blank or
-      #   comment-only line there (one slot cannot be both), and the group
-      #   pass reads only lines that are not comment-only — so the merge
-      #   cannot double-flag a line, and the sort restores the file-then-line
-      #   order {unreachable_findings} promises.
+      #   {separated_findings_in_text}), one per run whose example carries its own
+      #   trailing annotation (see {own_line_shadow_findings_in_text}) plus one
+      #   per group line carrying the trailing form (see
+      #   {group_line_findings_in_text}). The four passes are disjoint by
+      #   construction: the stacked pass flags all but the LAST line of a run
+      #   when an example directly follows, the shadow pass flags ONLY that last
+      #   line (and only when the example also carries `@intent: {`), the
+      #   separated pass needs a blank or comment-only line after the run (one
+      #   slot cannot be both that and an example), and the group pass reads
+      #   only lines that are not comment-only — so the merge cannot double-flag
+      #   a line, and the sort restores the file-then-line order
+      #   {unreachable_findings} promises.
       def unreachable_findings_in_text(text, file:)
         # A file that is not valid UTF-8 is reported once, loudly, by the
         # backend as a read failure; nothing positional can be said about it,
@@ -386,6 +404,7 @@ module SpecGuard
 
         (stacked_findings_in_text(text, file: file) +
          separated_findings_in_text(text, file: file) +
+         own_line_shadow_findings_in_text(text, file: file) +
          group_line_findings_in_text(text, file: file)).sort_by(&:line)
       end
 
@@ -468,6 +487,44 @@ module SpecGuard
             findings << Finding.new(file: file, line: j + 1, problem: UNREACHABLE_SEPARATED_ANNOTATION,
                                     kind: Finding::KIND_UNREACHABLE)
           end
+        end
+
+        findings
+      end
+
+      # @param text [String] source of one file
+      # @param file [String] path to record on each Finding
+      # @return [Array<Finding>] one per maximal run of comment-form
+      #   `@intent:` lines whose following line is an example
+      #   ({EXAMPLE_LINE}) that ALSO carries a trailing `@intent: {`
+      #   ({INTENT_WITH_PAYLOAD}) — reported on the run's LAST line, the one
+      #   the lookback would otherwise claim. Extraction is own-line-first
+      #   (SPGD-12 §2), so the example's own annotation always wins and that
+      #   comment is dead. Earlier lines of a longer run are the stacked arm's
+      #   ({stacked_findings_in_text}); each dead line is flagged exactly once.
+      def own_line_shadow_findings_in_text(text, file:)
+        # Same UTF-8 contract as the stacked pass above.
+        return [] unless text.valid_encoding?
+
+        lines = text.lines
+        i = 0
+        findings = []
+
+        while i < lines.length
+          unless COMMENT_INTENT_LINE.match?(lines[i])
+            i += 1
+            next
+          end
+
+          i += 1 while i < lines.length && COMMENT_INTENT_LINE.match?(lines[i])
+          run_end = i # exclusive; lines[run_end] is the line after the run
+
+          example = lines[run_end]
+          next if example.nil?
+          next unless EXAMPLE_LINE.match?(example) && INTENT_WITH_PAYLOAD.match?(example)
+
+          findings << Finding.new(file: file, line: run_end, problem: UNREACHABLE_SHADOWED_ANNOTATION,
+                                  kind: Finding::KIND_UNREACHABLE)
         end
 
         findings

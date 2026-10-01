@@ -53,14 +53,47 @@ RSpec.describe SpecGuard::RSpec::Scanner do
       expect(findings(text)).to be_empty
     end
 
-    # @intent: { entity: "Scanner", action: "spare mixed forms", behavior: "a comment annotation above a line that also carries a trailing annotation is not flagged, the stacked rule covering comment-form pairs only", layer: "unit" }
-    it "does not flag a comment-form annotation above a trailing-form line" do
-      # The stacked rule is comment-form pairs only (SPGD-900's fix): a
-      # comment-form annotation above a trailing-form line may be dead too,
-      # but that shape is out of scope and must not over-match.
+    # @intent: { entity: "Scanner", action: "flag a shadowed comment annotation", behavior: "a comment annotation directly above an example line carrying its own trailing annotation yields one unreachable finding on the comment line, because own-line extraction wins", layer: "unit" }
+    it "flags a comment-form annotation shadowed by its example's own trailing annotation" do
+      # SPGD-900 deferred this shape as out of scope; SPGD-1560 owns it
+      # (ported from specguard-ts SPGD-1556). Extraction is own-line-first, so
+      # the comment is dead metadata.
       text = <<~RUBY
         # @intent: { entity: "A" }
         it { is_expected.to eq(1) } # @intent: { entity: "B" }
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+      expect(findings(text).first.kind).to eq(SpecGuard::RSpec::Finding::KIND_UNREACHABLE)
+      expect(findings(text).first.problem).to eq(SpecGuard::RSpec::Scanner::UNREACHABLE_SHADOWED_ANNOTATION)
+    end
+
+    # @intent: { entity: "Scanner", action: "flag each dead line once", behavior: "a two-line comment run above a shadowing example flags lines one and two exactly once, the stacked arm taking the upper and the shadow arm the last", layer: "unit" }
+    it "flags a 2-line run above a shadowing example on lines 1 and 2 with no double-flag" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        # @intent: { entity: "B" }
+        it { is_expected.to eq(1) } # @intent: { entity: "C" }
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1, 2])
+    end
+
+    # @intent: { entity: "Scanner", action: "spare plain examples", behavior: "a comment annotation directly above an example with no trailing annotation produces no findings", layer: "unit" }
+    it "does not flag a comment-form annotation above a plain example" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        it { is_expected.to eq(1) }
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "anchor the shadow arm on examples", behavior: "a comment annotation above a non-example line carrying a trailing annotation is not flagged by the shadow arm", layer: "unit" }
+    it "does not flag a comment-form annotation above a non-example line with a trailing annotation" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        foo = 1 # @intent: { entity: "B" }
       RUBY
 
       expect(findings(text)).to be_empty
