@@ -49,8 +49,9 @@ bundle exec ruby -rminitest/specguard_plugin -e 'Minitest.extensions << "specgua
 Validates `# @intent:` annotations in changed (or all) `*_spec.rb` files against the OpenTestIntent
 JSON Schema. Exits `1` on a malformed annotation — or a well-formed but unreachable one (stacked
 above another comment-form `@intent:` line, so the one-line lookback never claims it; separated
-from its `it` by one blank or ordinary comment line, which puts it out of the lookback's reach; or
-trailing on a `describe`/`context` group line, which no example's extraction can ever reach) — and
+from its `it` by one blank or ordinary comment line, which puts it out of the lookback's reach;
+directly above an `it` that carries its own trailing `@intent:`, which extraction prefers, so the
+comment is shadowed; or trailing on a `describe`/`context` group line, which no example's extraction can ever reach) — and
 **never** fails on a *missing* one (adoption is opt-in and gradual).
 
 ```bash
@@ -336,8 +337,8 @@ Every way the backend can fail — the binary is missing, will not execute, exit
 is not a verdict, or emits output that is not a report — is **exit 2**, the linter's "could not do
 my job" code. It never becomes exit 1, which means "an annotation is malformed" — or well-formed
 but unreachable: stacked above another comment-form `@intent:` line, so the one-line lookback
-never claims it, separated from its `it` by one blank or ordinary comment line, or trailing on a
-`describe`/`context` group line, which no example's extraction can ever reach — and nothing else.
+never claims it, separated from its `it` by one blank or ordinary comment line, shadowed by its
+`it`'s own trailing `@intent:`, or trailing on a `describe`/`context` group line, which no example's extraction can ever reach — and nothing else.
 
 ## The formatter — `SpecGuard::RSpecFormatter`
 

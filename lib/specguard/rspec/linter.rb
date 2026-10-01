@@ -40,15 +40,17 @@ module SpecGuard
     # `Finding::KIND_UNREACHABLE` — an annotation that is well-formed in
     # isolation but can never be extracted, so the one-line lookback
     # (SPGD-12 §2) never claims it — is also reported as a failure, and
-    # therefore also exits 1. Three shapes reach this kind: a comment-form
+    # therefore also exits 1. Four shapes reach this kind: a comment-form
     # `@intent:` stacked above another comment-form `@intent:` line (SPGD-900),
     # an `@intent:` trailing on an example-group line, which is no
     # example's own and not comment-only (SPGD-1510), and a comment-form
     # `@intent:` run separated from its example by one blank or ordinary
-    # comment line (SPGD-1554). Nothing about any of them is malformed; the
+    # comment line (SPGD-1554), and a comment-form `@intent:` directly above an
+    # example whose own line carries a trailing `@intent:`, which own-line-first
+    # extraction prefers (SPGD-1560). Nothing about any of them is malformed; the
     # contract is dead metadata, counted by the linter and discarded by
     # extraction, and the structural pass that flags them (SPGD-900,
-    # SPGD-1510, SPGD-1554) reports it loudly rather than letting it pass as
+    # SPGD-1510, SPGD-1554, SPGD-1560) reports it loudly rather than letting it pass as
     # clean.
     module Linter
       # One annotation's verdict. `problem` is set when discovery could not
