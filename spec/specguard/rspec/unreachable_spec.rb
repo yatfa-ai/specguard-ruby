@@ -414,6 +414,119 @@ RSpec.describe SpecGuard::Client::Scanner do
     end
   end
 
+  describe ".unreachable_findings_in_text (SPGD-1573: the example vocabulary)" do
+    def findings(text)
+      described_class.unreachable_findings_in_text(text, file: "order_spec.rb")
+    end
+
+    keywords = %w[xit fit example focus fspecify xspecify fexample xexample]
+
+    stacked = lambda do |kw|
+      <<~RUBY
+        # @intent: { entity: "A" }
+        # @intent: { entity: "B" }
+        #{kw} "restores stock" do end
+      RUBY
+    end
+    separated = lambda do |kw|
+      <<~RUBY
+        # @intent: { entity: "A" }
+
+        #{kw} "restores stock" do end
+      RUBY
+    end
+    shadow = lambda do |kw|
+      <<~RUBY
+        # @intent: { entity: "A" }
+        #{kw} { is_expected.to eq(1) } # @intent: { entity: "B" }
+      RUBY
+    end
+
+    keywords.each do |kw|
+      # @intent: { entity: "Scanner", action: "anchor the stacked arm on every example keyword", behavior: "a stacked comment-form run above an RSpec example keyword yields the same single finding (line and message) as above it", layer: "unit" }
+      it "flags a stacked run above #{kw} exactly as above it" do
+        expect(findings(stacked.call(kw)).map { |f| [f.line, f.problem] })
+          .to eq(findings(stacked.call("it")).map { |f| [f.line, f.problem] })
+        expect(findings(stacked.call(kw)).length).to eq(1)
+      end
+
+      # @intent: { entity: "Scanner", action: "anchor the separated arm on every example keyword", behavior: "a comment annotation separated by a blank line from an RSpec example keyword yields the same single finding as for it", layer: "unit" }
+      it "flags a separated annotation above #{kw} exactly as above it" do
+        expect(findings(separated.call(kw)).map { |f| [f.line, f.problem] })
+          .to eq(findings(separated.call("it")).map { |f| [f.line, f.problem] })
+        expect(findings(separated.call(kw)).length).to eq(1)
+      end
+
+      # @intent: { entity: "Scanner", action: "anchor the shadow arm on every example keyword", behavior: "a comment annotation shadowed by an RSpec example keyword's own trailing annotation yields the same single finding as for it", layer: "unit" }
+      it "flags a shadowed annotation above #{kw} exactly as above it" do
+        expect(findings(shadow.call(kw)).map { |f| [f.line, f.problem] })
+          .to eq(findings(shadow.call("it")).map { |f| [f.line, f.problem] })
+        expect(findings(shadow.call(kw)).length).to eq(1)
+      end
+
+      # @intent: { entity: "Scanner", action: "exempt one-liner groups for every example keyword", behavior: "a group line that also defines its example with an RSpec example keyword keeps its trailing annotation unflagged", layer: "unit" }
+      it "spares a one-liner group whose example is #{kw}" do
+        text = <<~RUBY
+          describe "g" do #{kw}("y") { } # @intent: { entity: "A", behavior: "renders the thing it names", layer: "unit" }
+        RUBY
+
+        expect(findings(text)).to be_empty
+      end
+    end
+
+    # @intent: { entity: "Scanner", action: "still flag real group-line annotations", behavior: "a describe group line with no example on it and a trailing annotation is still flagged exactly once", layer: "unit" }
+    it "still flags a genuine group-line annotation" do
+      text = <<~RUBY
+        describe "g" do # @intent: { entity: "A", behavior: "renders the thing it names", layer: "unit" }
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1])
+    end
+
+    negative_controls = {
+      "example.run" => "example.run",
+      "example.metadata[:x]" => "example.metadata[:x]",
+      "skip" => 'skip "r"',
+      "pending" => 'pending "r"',
+      "fitness" => 'fitness "x"',
+      "focus: true" => "focus: true",
+      "example_group" => 'example_group "g" do'
+    }
+
+    negative_controls.each do |label, line|
+      # @intent: { entity: "Scanner", action: "not anchor on non-definitions", behavior: "a line that is not an example definition never anchors the stacked, separated or shadow arms", layer: "unit" }
+      it "does not anchor on #{label}" do
+        [stacked, separated].each do |build|
+          text = build.call("it").sub(/^it .*$/, line)
+          expect(findings(text)).to be_empty
+        end
+        # example_group IS a group keyword, so the group arm legitimately owns
+        # its trailing-annotation shape; only the shadow arm is asserted off it.
+        next if label == "example_group"
+
+        text = "# @intent: { entity: \"A\" }\n#{line} # @intent: { entity: \"B\" }\n"
+        expect(findings(text)).to be_empty
+      end
+    end
+
+    # @intent: { entity: "Scanner", action: "spare the around-hook idiom", behavior: "stacked and separated annotation runs followed by an around hook calling example.run or by example.metadata produce no finding", layer: "unit" }
+    it "does not flag the around-hook idiom" do
+      text = <<~RUBY
+        # @intent: { entity: "A" }
+        # @intent: { entity: "B" }
+        around do |example|
+          example.run
+        end
+        # @intent: { entity: "C" }
+
+        example.metadata[:x]
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+  end
+
   describe ".unreachable_findings_in_file" do
     # @intent: { entity: "Scanner", action: "read a missing file", behavior: "asking for unreachable findings on a path that does not exist returns an empty list rather than raising", layer: "unit" }
     it "contributes nothing for a file that cannot be read" do

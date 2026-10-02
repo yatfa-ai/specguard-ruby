@@ -354,6 +354,18 @@ module SpecGuard
       # example on the NEXT line may claim ({AnnotationLookup::COMMENT_LINE}).
       COMMENT_INTENT_LINE = /\A\s*#.*@intent:/
 
+      # The one source of the example-call vocabulary, shared by
+      # {EXAMPLE_LINE} and {EXAMPLE_ON_LINE}. `it`/`specify` are matched on
+      # `\b` alone; the other eight keywords also carry a `(?![:.])`
+      # lookahead, which is load-bearing: `example.run` (the around-hook
+      # idiom), `example.metadata[:x]` and `focus: true` are not example
+      # definitions and must never anchor. (`\b` already excludes `fitness`
+      # and `example_group`, a GROUP_LINE keyword.) `skip` and `pending` are
+      # deliberately EXCLUDED: at line start they are the runtime call inside
+      # an example body, not an example definition.
+      EXAMPLE_CALL_SOURCE =
+        "(?:(?:it|specify)\\b|(?:example|focus|fexample|fit|fspecify|xexample|xit|xspecify)\\b(?![:.]))"
+
       # The line an annotation run may be claimed from: the first example
       # keyword. The lookback rule is `example.metadata[:line_number] - 1`, so
       # only the comment form on the line immediately above an example is
@@ -367,7 +379,14 @@ module SpecGuard
       # example: stacked lines above it (SPGD-897), the trailing form on
       # a group line directly above it (SPGD-1510), and a comment-form run
       # separated from it by one blank/comment line (SPGD-1554).
-      EXAMPLE_LINE = /\A\s*(?:it|specify)\b/
+      #
+      # The vocabulary is every example method RSpec core defines
+      # (`example focus fexample fit fspecify xexample xit xspecify`, besides
+      # `it`/`specify`): lookup is keyed by `example.metadata[:line_number]`, so
+      # an annotation stacked/separated/shadowed above `xit` is exactly as dead
+      # as one above `it`. Both this anchor and {EXAMPLE_ON_LINE} are built
+      # from {EXAMPLE_CALL_SOURCE}, so anchor and exemption cannot drift.
+      EXAMPLE_LINE = /\A\s*#{EXAMPLE_CALL_SOURCE}/
 
       # A blank (whitespace-only) line — one of the two interleaves the
       # separated pass reads. `\n` is whitespace, so a `text.lines` element
@@ -574,7 +593,7 @@ module SpecGuard
       # only ever a missed flag: prose can turn the exemption ON, never a
       # real example OFF. The one-line example's own payload is never
       # consulted, so a payload can never exempt anything.
-      EXAMPLE_ON_LINE = /(?:\bdo\b|\{|;)\s*(?:it|specify)\b/
+      EXAMPLE_ON_LINE = /(?:\bdo\b|\{|;)\s*#{EXAMPLE_CALL_SOURCE}/
 
       # @param text [String] source of one file
       # @param file [String] path to record on each Finding
