@@ -12,7 +12,7 @@
 # so they are treated as data, not as examples.
 RSpec.describe "acceptance corpus" do
   def scan(fixture)
-    SpecGuard::RSpec::Scanner.scan_file(fixture_path(fixture))
+    SpecGuard::Client::Scanner.scan_file(fixture_path(fixture))
   end
 
   describe "examples/sources/order_spec.rb — every annotation extracts cleanly" do
@@ -39,7 +39,7 @@ RSpec.describe "acceptance corpus" do
     # @intent: { entity: "PayloadNormalizer", action: "normalize corpus payloads", behavior: "each raw payload captured from the order fixture normalizes to a string JSON.parse accepts without raising", layer: "unit" }
     it "normalizes every payload to a string JSON.parse accepts" do
       raw_payloads(fixture_path("order_spec.rb")).each do |line_no, raw|
-        normalized = SpecGuard::RSpec::PayloadNormalizer.normalize(raw)
+        normalized = SpecGuard::Client::PayloadNormalizer.normalize(raw)
         expect { JSON.parse(normalized) }.not_to raise_error, "line #{line_no} normalized to #{normalized.inspect}"
       end
     end
@@ -87,7 +87,7 @@ RSpec.describe "acceptance corpus" do
       finding = findings.find { |f| f.line == 28 }
 
       expect(finding.problem).to eq("unterminated object literal (an annotation must fit on one line)")
-      expect(finding.kind).to eq(SpecGuard::RSpec::Finding::KIND_EXTRACTION)
+      expect(finding.kind).to eq(SpecGuard::Client::Finding::KIND_EXTRACTION)
       expect(finding.intent).to be_nil
     end
 
@@ -96,7 +96,7 @@ RSpec.describe "acceptance corpus" do
       finding = findings.find { |f| f.line == 34 }
 
       expect(finding.problem).to eq("no '{...}' object literal follows the @intent: token")
-      expect(finding.kind).to eq(SpecGuard::RSpec::Finding::KIND_EXTRACTION)
+      expect(finding.kind).to eq(SpecGuard::Client::Finding::KIND_EXTRACTION)
     end
 
     # The whole reason problems are Findings and not silent skips: a typo'd

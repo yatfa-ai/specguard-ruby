@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module SpecGuard
-  module RSpec
+  module Client
     # One `@intent:` annotation, located and (where possible) parsed.
     #
     # Exactly one of `intent` and `problem` is non-nil:
@@ -25,7 +25,7 @@ module SpecGuard
     #
     # NOTE: this is a subclass of an anonymous `Data.define` rather than a
     # `Data.define do ... end` block, because a constant assigned inside that
-    # block binds to the *lexically* enclosing module (SpecGuard::RSpec) rather
+    # block binds to the *lexically* enclosing module (SpecGuard::Client) rather
     # than to the value class — so KIND_EXTRACTION below would silently not be
     # `Finding::KIND_EXTRACTION`.
     class Finding < Data.define(:file, :line, :intent, :problem, :kind)

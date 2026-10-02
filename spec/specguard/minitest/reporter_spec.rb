@@ -4,7 +4,7 @@ require "stringio"
 require "tmpdir"
 require "minitest"
 
-require "specguard/rspec/transport"
+require "specguard/client/transport"
 require "specguard/minitest/reporter"
 require_relative "../../support/validator_stub"
 
@@ -26,7 +26,7 @@ module SpecGuard
       end
 
       def configuration(env)
-        SpecGuard::RSpec::Configuration.new(env: env)
+        SpecGuard::Client::Configuration.new(env: env)
       end
 
       # `Reporter.repo_root` memoizes into a class-level ivar on the
@@ -90,7 +90,7 @@ module SpecGuard
         transport.define_singleton_method(:deliver) do |data|
           calls += 1
           captured = data
-          SpecGuard::RSpec::Transport::Result.new(outcome: outcome,
+          SpecGuard::Client::Transport::Result.new(outcome: outcome,
             code: outcome == :success ? 202 : 400)
         end
         [transport, -> { captured }, -> { calls }]
@@ -334,7 +334,7 @@ module SpecGuard
         # AnnotationLookup and ships whatever verdict comes back. A double
         # here would agree with the reporter by construction.
         def stub_validator_annotations
-          SpecGuard::RSpec::AnnotationLookup.new(
+          SpecGuard::Client::AnnotationLookup.new(
             env: { "SPECGUARD_VALIDATE_INTENT" => ValidatorStub.install_stubbable }
               .merge(ValidatorStub.stub_env)
           )
@@ -431,7 +431,7 @@ module SpecGuard
         # a blow-up costs the row only its annotation.
         # @intent: { entity: "Minitest Reporter", action: "survive lookup failure", behavior: "a failing annotation lookup costs the row its annotation only, warns once, and never affects the suite verdict", layer: "unit" }
         it "ships the row unannotated when the annotation lookup raises" do
-          broken = SpecGuard::RSpec::AnnotationLookup.new
+          broken = SpecGuard::Client::AnnotationLookup.new
           allow(broken).to receive(:intent_for).and_raise(IOError, "spec file vanished")
           output = StringIO.new
           reporter = Reporter.new(configuration: configuration(base_env),
@@ -460,7 +460,7 @@ module SpecGuard
         # pin uses, fifty `finish` calls behind one `WARNING_PREFIX` scan.
         # @intent: { entity: "Minitest Reporter", action: "hold the warning budget", behavior: "a multi-row run whose every annotation lookup fails warns exactly once, keeps every row recorded and unannotated, and never affects the suite verdict", layer: "unit" }
         it "warns exactly once however many rows hit a failing annotation lookup" do
-          broken = SpecGuard::RSpec::AnnotationLookup.new
+          broken = SpecGuard::Client::AnnotationLookup.new
           allow(broken).to receive(:intent_for).and_raise(IOError, "spec file vanished")
           transport, _, calls = recording_transport
           output = StringIO.new
@@ -484,7 +484,7 @@ module SpecGuard
         # relativized path the row ships — with the definition-site line.
         # @intent: { entity: "Minitest Reporter", action: "delegate coordinates", behavior: "the reporter asks the lookup with the relativized file path and the integer line the row carries", layer: "unit" }
         it "asks the lookup with the same file and line the row carries" do
-          annotations = instance_double(SpecGuard::RSpec::AnnotationLookup, intent_for: nil)
+          annotations = instance_double(SpecGuard::Client::AnnotationLookup, intent_for: nil)
           reporter = Reporter.new(configuration: configuration(base_env),
                                   transport: recording_transport.first, output: StringIO.new,
                                   annotations: annotations)
@@ -771,7 +771,7 @@ module SpecGuard
         # schema-valid exactly when status says annotated.
         # @intent: { entity: "Minitest Reporter", action: "pin the wire contract", behavior: "an annotated row carries status annotated with the intent the lookup returned", layer: "unit" }
         it "carries the annotated status and intent together on an annotated row" do
-          annotations = instance_double(SpecGuard::RSpec::AnnotationLookup)
+          annotations = instance_double(SpecGuard::Client::AnnotationLookup)
           intent = { "entity" => "Order", "action" => "refund stock",
                      "behavior" => "a refund restores the stock the order consumed", "layer" => "unit" }
           allow(annotations).to receive(:intent_for).and_return(intent)

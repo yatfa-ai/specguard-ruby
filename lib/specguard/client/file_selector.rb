@@ -3,7 +3,7 @@
 require "open3"
 
 module SpecGuard
-  module RSpec
+  module Client
     # Chooses which spec files the linter reads.
     #
     # Two modes: every Ruby test file under the working directory (the

@@ -7,7 +7,7 @@ require "net/http"
 require "open3"
 
 module SpecGuard
-  module RSpec
+  module Client
     # The Go validator backend: `validate-intent --source --json`, and since
     # SPGD-867 the ONLY validator `specguard-lint` has.
     #
@@ -36,7 +36,7 @@ module SpecGuard
     # consumers are `Formatter` and `Transport`, and `CLI` does not reference
     # it at all — so threading the lint backend through it would make the
     # linter depend on the telemetry object solely to read one env var. It also
-    # memoizes process-wide (`SpecGuard::RSpec.configuration`), with
+    # memoizes process-wide (`SpecGuard.configuration`), with
     # `reset_configuration!` existing only for tests, which is a poor fit for
     # something a spec wants to vary per example. {CLI} takes an `env:` instead
     # and asks this module, so the seam is one hash away in a test and one

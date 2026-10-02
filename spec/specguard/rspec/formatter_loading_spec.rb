@@ -6,14 +6,15 @@ require "open3"
 #
 # `specguard-ruby.gemspec` declares exactly one runtime dependency —
 # `json`. `rspec` is a **development** gem here, listed only in the
-# Gemfile. `bin/specguard-lint` loads `specguard/rspec`, so anyone who installed
+# Gemfile. `bin/specguard-lint` loads `specguard/client` (and `specguard/rspec`, the
+# documented `SpecGuard::RSpec.configure` entry point, rides the same chain), so anyone who installed
 # this gem purely to lint annotations must be able to load that on a machine
 # with no RSpec at all: their CI lint step may well be a `gem install` in a
 # container that never runs a test.
 #
-# That makes "does `require "specguard/rspec"` pull in `rspec/core`?" a real
+# That makes "does `require "specguard/client"` (or `"specguard/rspec"`) pull in `rspec/core`?" a real
 # packaging contract rather than a stylistic preference, and one that a single
-# stray `require_relative "rspec/formatter"` at the bottom of lib/specguard/rspec.rb
+# stray `require_relative "rspec/formatter"` at the bottom of lib/specguard/client.rb
 # would break invisibly — invisibly, because in *this* repo RSpec is always
 # present, so every other spec would keep passing.
 #
@@ -40,9 +41,9 @@ RSpec.describe "the gem's load boundary" do
         require "specguard/rspec"
         puts(defined?(::RSpec::Core) ? "rspec-core DEFINED" : "rspec-core absent")
         puts "loaded_features=\#{$LOADED_FEATURES.grep(%r{/rspec/core}).length}"
-        puts "linter=\#{SpecGuard::RSpec::CLI.name}"
-        puts(defined?(SpecGuard::RSpec::Transport) ? "transport DEFINED" : "transport absent")
-        puts(defined?(SpecGuard::RSpec::Configuration) ? "configuration DEFINED" : "configuration absent")
+        puts "linter=\#{SpecGuard::Client::CLI.name}"
+        puts(defined?(SpecGuard::Client::Transport) ? "transport DEFINED" : "transport absent")
+        puts(defined?(SpecGuard::Client::Configuration) ? "configuration DEFINED" : "configuration absent")
       RUBY
     end
 
@@ -67,12 +68,12 @@ RSpec.describe "the gem's load boundary" do
 
     # @intent: { entity: "gem load boundary", action: "require the linter half", behavior: "the linter chain resolves to the CLI constant, so the entry point is whole without the test framework", layer: "integration" }
     it "still gives the linter everything it needs" do
-      expect(stdout).to include("linter=SpecGuard::RSpec::CLI")
+      expect(stdout).to include("linter=SpecGuard::Client::CLI")
     end
 
     # Criterion 8. The transport chain belongs to the formatter half and must
     # stay there. `transport.rb` requires `configuration.rb`, so a stray
-    # `require_relative "transport"` in lib/specguard/rspec.rb would drag both
+    # `require_relative "transport"` in lib/specguard/client.rb would drag both
     # onto the linter's load path — and every other spec would keep passing,
     # because in *this* repo everything is present anyway. What the linter must
     # not gain is a reason to fail: it is installed on machines with no test
@@ -84,11 +85,29 @@ RSpec.describe "the gem's load boundary" do
     end
   end
 
+  describe "require \"specguard/client\" — the framework-free entry point" do
+    subject(:result) do
+      load_in_fresh_ruby(<<~RUBY)
+        require "specguard/client"
+        puts(defined?(::RSpec::Core) ? "rspec-core DEFINED" : "rspec-core absent")
+        puts "loaded_features=\#{$LOADED_FEATURES.grep(%r{/rspec/core}).length}"
+        puts "linter=\#{SpecGuard::Client::CLI.name}"
+        puts(defined?(SpecGuard::Client::Configuration) ? "configuration DEFINED" : "configuration absent")
+      RUBY
+    end
+
+    # @intent: { entity: "gem load boundary", action: "require the framework-free half", behavior: "requiring specguard/client alone loads the linter without any rspec-core file and without the formatter's configuration", layer: "integration" }
+    it "loads the linter with no rspec-core and no configuration on the chain" do
+      expect(result[2]).to eq(0), "stderr was: #{result[1]}"
+      expect(result[0]).to include("rspec-core absent", "loaded_features=0", "linter=SpecGuard::Client::CLI", "configuration absent")
+    end
+  end
+
   # Criterion 8, end to end rather than by constant: the linter's real
   # entrypoint, in an interpreter that has never heard of RSpec, still returning
   # the exit code the 0/1/2 contract promises. `--version` is used because it is
   # the one invocation that needs no fixture on disk, and it still exercises the
-  # whole `require "specguard/rspec"` → `CLI#run` chain that the bin is.
+  # whole `require "specguard/client"` → `CLI#run` chain that the bin is.
   describe "bin/specguard-lint, on a machine with no RSpec" do
     subject(:result) do
       stdout, stderr, status = Open3.capture3(
@@ -120,8 +139,8 @@ RSpec.describe "the gem's load boundary" do
         puts "formatter=\#{SpecGuard::RSpecFormatter.name}"
         puts "superclass=\#{SpecGuard::RSpecFormatter.superclass.name}"
         puts "configurable=\#{SpecGuard::RSpec.configuration.output_path}"
-        puts "transport=\#{SpecGuard::RSpec::Transport.name}"
-        puts "path=\#{SpecGuard::RSpec::Transport::PATH}"
+        puts "transport=\#{SpecGuard::Client::Transport.name}"
+        puts "path=\#{SpecGuard::Client::Transport::PATH}"
       RUBY
     end
 
@@ -130,7 +149,7 @@ RSpec.describe "the gem's load boundary" do
     # Standalone: it must not assume the linter half was required first, or the
     # documented one-line `.rspec` opt-in would only work by accident.
     # @intent: { entity: "gem load boundary", action: "require the formatter half", behavior: "requiring the formatter file alone, without the linter half, exits zero in the fresh interpreter", layer: "integration" }
-    it "loads on its own, without specguard/rspec having been required" do
+    it "loads on its own, without specguard/client having been required" do
       expect(result[2]).to eq(0), "stderr was: #{result[1]}"
       expect(stdout).to include("formatter=SpecGuard::RSpecFormatter")
     end
@@ -155,7 +174,7 @@ RSpec.describe "the gem's load boundary" do
     # on this one chain.
     # @intent: { entity: "gem load boundary", action: "require the formatter half", behavior: "the transport constant and its ingest path arrive on the same require chain the documented opt-in uses", layer: "integration" }
     it "brings the transport with it, so close has something to POST with" do
-      expect(stdout).to include("transport=SpecGuard::RSpec::Transport")
+      expect(stdout).to include("transport=SpecGuard::Client::Transport")
       expect(stdout).to include("path=/api/v1/ingest")
     end
   end

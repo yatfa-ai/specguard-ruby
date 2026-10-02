@@ -29,7 +29,7 @@ RSpec.describe SpecGuard::RSpecFormatter do
   # below depend on a spec file existing at the path the double reports.
   # Answering nil is "unannotated", which is what every example that does not
   # say otherwise expects.
-  let(:annotations) { instance_double(SpecGuard::RSpec::AnnotationLookup, intent_for: nil) }
+  let(:annotations) { instance_double(SpecGuard::Client::AnnotationLookup, intent_for: nil) }
 
   let(:intent) do
     { "entity" => "Order", "action" => "checkout",
@@ -805,7 +805,7 @@ RSpec.describe SpecGuard::RSpecFormatter do
         specs = nil
         with_isolated_memos do
           Dir.chdir(work) do
-            lookup = SpecGuard::RSpec::AnnotationLookup.new(
+            lookup = SpecGuard::Client::AnnotationLookup.new(
               env: { "SPECGUARD_VALIDATE_INTENT" => ValidatorStub.install_stubbable }
                 .merge(ValidatorStub.stub_env)
             )
@@ -916,12 +916,12 @@ RSpec.describe SpecGuard::RSpecFormatter do
     # replay-queue file is neither created nor written.
     # @intent: { entity: "RSpecFormatter local sink", action: "stay offline without a key", behavior: "with no api key configured the formatter attempts no HTTP call at all", layer: "unit" }
     it "attempts no HTTP call at all when there is no API key" do
-      allow(SpecGuard::RSpec::Transport).to receive(:new).and_call_original
+      allow(SpecGuard::Client::Transport).to receive(:new).and_call_original
 
       finish(build_example)
       formatter.close(nil)
 
-      expect(SpecGuard::RSpec::Transport).not_to have_received(:new)
+      expect(SpecGuard::Client::Transport).not_to have_received(:new)
     end
 
     # @intent: { entity: "RSpecFormatter local sink", action: "append the run", behavior: "the run lands in the sink as a single JSON object on one line", layer: "unit" }
@@ -1066,12 +1066,12 @@ RSpec.describe SpecGuard::RSpecFormatter do
 
     # @intent: { entity: "RSpecFormatter delivery", action: "POST the run", behavior: "delivery honours the configured timeout rather than the http library default", layer: "unit" }
     it "honours the configured timeout rather than Net::HTTP's 60 seconds" do
-      allow(SpecGuard::RSpec::Transport).to receive(:new).and_call_original
+      allow(SpecGuard::Client::Transport).to receive(:new).and_call_original
 
       StubIngestEndpoint.run do |server|
         deliver_to(server, timeout: 3)
 
-        expect(SpecGuard::RSpec::Transport)
+        expect(SpecGuard::Client::Transport)
           .to have_received(:new).with(hash_including(timeout: 3))
       end
     end
@@ -1873,7 +1873,7 @@ RSpec.describe SpecGuard::RSpecFormatter do
     describe "when the annotation lookup itself fails" do
       before { allow(annotations).to receive(:intent_for).and_raise(broken_lookup) }
 
-      let(:broken_lookup) { SpecGuard::RSpec::ValidatorError.new("could not resolve the validator") }
+      let(:broken_lookup) { SpecGuard::Client::ValidatorError.new("could not resolve the validator") }
 
       # @intent: { entity: "RSpecFormatter", action: "survive lookup failure", behavior: "a failing annotation lookup never raises out of example finished", layer: "unit" }
       it "does not raise out of example_finished" do

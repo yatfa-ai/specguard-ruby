@@ -9,7 +9,7 @@ require "zlib"
 # == Why not a stubbed `Net::HTTP`
 #
 # The thing under test *is* the HTTP call. A `Net::HTTP` double proves that
-# {SpecGuard::RSpec::Transport} calls the methods the test author expected it to
+# {SpecGuard::Client::Transport} calls the methods the test author expected it to
 # call, which is exactly the claim that is worth nothing here: it would stay
 # green through a missing `use_ssl`, a body that never got written, a path
 # assembled with one slash too many, and a `Bearer` header the platform's

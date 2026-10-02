@@ -21,7 +21,7 @@ module FixtureHelpers
   # The `@intent:` payloads in a fixture, as written. Lets a test assert on the
   # normalizer's input without hard-coding the fixture's long annotation lines.
   def raw_payloads(path)
-    SpecGuard::RSpec::AnnotationScanner
+    SpecGuard::Client::AnnotationScanner
       .each_intent(File.read(path))
       .filter_map { |line_no, raw, problem| [line_no, raw] if problem.nil? }
   end

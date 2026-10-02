@@ -3,7 +3,7 @@
 require "json"
 
 module SpecGuard
-  module RSpec
+  module Client
     # Relaxes PROTOCOL.md §1's permissive annotation syntax into strict JSON.
     #
     # §1 promises "the linter normalizes before validating" and lists three

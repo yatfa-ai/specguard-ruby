@@ -23,7 +23,7 @@ require "open3"
 # stored recording is this convention, never staleness — do not "fix" a
 # stripped recording by pasting raw binary output.
 #
-# That is deliberate, not a shortcut. `lib/specguard/rspec.rb`'s SCHEMA_PATH
+# That is deliberate, not a shortcut. `lib/specguard/client.rb`'s SCHEMA_PATH
 # forbids this gem a cross-repo runtime dependency, and a spec that shelled out
 # to a Go binary would pass on one container and be unrunnable on every other.
 # There is no Ruby backend to run the other side of any such comparison —
@@ -52,7 +52,7 @@ require "open3"
 #     `#### Read-failure wording` section describes the same ground in prose
 #     and numbers nothing, so it cannot be the index these labels count from;
 #   * that every way the backend can fail is exit 2 and never exit 1.
-RSpec.describe SpecGuard::RSpec::ValidatorBackend do
+RSpec.describe SpecGuard::Client::ValidatorBackend do
   subject(:backend) { described_class }
 
   let(:tmpdir) { @tmpdir }
@@ -85,7 +85,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
   # The digest of the schema this gem vendors, read the way the gem reads it.
   def vendored_digest
-    Digest::SHA256.file(SpecGuard::RSpec::SCHEMA_PATH).hexdigest
+    Digest::SHA256.file(SpecGuard::Client::SCHEMA_PATH).hexdigest
   end
 
   # A `--version` line in the current format carrying somebody else's contract.
@@ -295,7 +295,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   def run_cli(env, argv = paths)
     stdout = StringIO.new
     stderr = StringIO.new
-    code = SpecGuard::RSpec::CLI.new(stdout: stdout, stderr: stderr, env: env).run(argv)
+    code = SpecGuard::Client::CLI.new(stdout: stdout, stderr: stderr, env: env).run(argv)
     [stdout.string, stderr.string, code]
   end
 
@@ -351,10 +351,10 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend", action: "resolve the validator", behavior: "a binary that cannot be obtained raises naming both remediations", layer: "unit" }
     it "raises when no binary can be obtained, naming both remediations" do
       allow(described_class::Installer).to receive(:obtain)
-        .and_raise(described_class::Installer::REMEDIATIONS.then { |r| SpecGuard::RSpec::ValidatorError.new(r) })
+        .and_raise(described_class::Installer::REMEDIATIONS.then { |r| SpecGuard::Client::ValidatorError.new(r) })
 
       expect { described_class.resolve(env: {}) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /SPECGUARD_VALIDATE_INTENT.*install\.sh/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /SPECGUARD_VALIDATE_INTENT.*install\.sh/)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "resolve the validator", behavior: "an executable binary path resolves to a runner", layer: "unit" }
@@ -380,13 +380,13 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend", action: "refuse unusable binaries", behavior: "a missing binary raises rather than returning an unusable runner", layer: "unit" }
     it "raises rather than returning an unusable runner when the binary is missing" do
       expect { described_class.resolve(env: { described_class::ENV_VAR => File.join(tmpdir, "nope") }) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /does not exist/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /does not exist/)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "refuse unusable binaries", behavior: "a directory handed as the binary raises", layer: "unit" }
     it "raises when the path is a directory" do
       expect { described_class.resolve(env: { described_class::ENV_VAR => tmpdir }) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /is not a file/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /is not a file/)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "refuse unusable binaries", behavior: "a non-executable binary path raises", layer: "unit" }
@@ -396,13 +396,13 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       FileUtils.chmod(0o644, path)
 
       expect { described_class.resolve(env: { described_class::ENV_VAR => path }) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /is not executable/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /is not executable/)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "refuse unusable binaries", behavior: "the diagnostics name the environment variable so the fix is obvious", layer: "unit" }
     it "names the variable in its diagnostics, so the fix is obvious" do
       expect { described_class.resolve(env: { described_class::ENV_VAR => File.join(tmpdir, "nope") }) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /SPECGUARD_VALIDATE_INTENT/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /SPECGUARD_VALIDATE_INTENT/)
     end
 
     # A bare command name is refused rather than resolved against PATH: which
@@ -413,13 +413,13 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend", action: "refuse unusable binaries", behavior: "a bare command name is refused with the hint for turning it into a path", layer: "unit" }
     it "refuses a bare command name and says how to turn it into a path" do
       expect { described_class.resolve(env: { described_class::ENV_VAR => "validate-intent" }) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /takes a path, not a command name/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /takes a path, not a command name/)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "refuse unusable binaries", behavior: "the bare-name hint is not offered when a path was given", layer: "unit" }
     it "does not offer that hint when it was given a path" do
       expect { described_class.resolve(env: { described_class::ENV_VAR => File.join(tmpdir, "nope") }) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /\Athe validator backend at .* does not exist\z/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /\Athe validator backend at .* does not exist\z/)
     end
   end
 
@@ -543,13 +543,13 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend::Runner", action: "batch a large selection", behavior: "no invocation exceeds the per-invocation file cap", layer: "integration" }
     it "never exceeds the per-invocation file cap" do
       expect(recorded_invocations.map { |args| args.length - 2 })
-        .to all(be <= SpecGuard::RSpec::ValidatorBackend::Runner::MAX_BATCH_FILES)
+        .to all(be <= SpecGuard::Client::ValidatorBackend::Runner::MAX_BATCH_FILES)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "batch a large selection", behavior: "every invocation argument bytes stay under the execve budget", layer: "integration" }
     it "keeps every invocation's argument bytes under the execve budget" do
       expect(recorded_invocations.map { |args| args.sum { |a| a.bytesize + 1 } })
-        .to all(be <= SpecGuard::RSpec::ValidatorBackend::Runner::MAX_ARG_BYTES + 32)
+        .to all(be <= SpecGuard::Client::ValidatorBackend::Runner::MAX_ARG_BYTES + 32)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "batch a large selection", behavior: "every path is passed exactly once in order across the batches", layer: "integration" }
@@ -566,7 +566,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # Dropping it would be the silent omission this project keeps naming.
     # @intent: { entity: "ValidatorBackend::Runner", action: "batch a large selection", behavior: "an over-long path gets a batch of its own rather than being dropped", layer: "integration" }
     it "gives an over-long path a batch of its own rather than dropping it" do
-      giant = "spec/#{'x' * (SpecGuard::RSpec::ValidatorBackend::Runner::MAX_ARG_BYTES + 10)}_spec.rb"
+      giant = "spec/#{'x' * (SpecGuard::Client::ValidatorBackend::Runner::MAX_ARG_BYTES + 10)}_spec.rb"
       run_backend([giant], stdout: document([ok_finding(file: giant)]), name: "giant")
 
       expect(recorded_invocations("giant").flat_map { |args| args.drop(2) }).to eq([giant])
@@ -601,7 +601,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       expect(result.reasons).to eq(["<root>: missing required property 'entity'",
                                     "<root>: additional property 'entiity' is not allowed"])
       expect(result.problem).to be_nil
-      expect(result.kind).to eq(SpecGuard::RSpec::Finding::KIND_SCHEMA)
+      expect(result.kind).to eq(SpecGuard::Client::Finding::KIND_SCHEMA)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "map the report", behavior: "an extraction finding maps onto the problem field for its one em-dashed line", layer: "integration" }
@@ -611,7 +611,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
       expect(result.problem).to eq("unterminated object literal (an annotation must fit on one line)")
       expect(result.reasons).to be_empty
-      expect(result.kind).to eq(SpecGuard::RSpec::Finding::KIND_EXTRACTION)
+      expect(result.kind).to eq(SpecGuard::Client::Finding::KIND_EXTRACTION)
     end
 
     # The wording here is RECORDED, not invented, and that distinction has
@@ -629,7 +629,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
       expect(result.problem).to eq("could not parse annotation: Expecting property name enclosed " \
                                    "in double quotes: line 1 column 2 (char 1)")
-      expect(result.kind).to eq(SpecGuard::RSpec::Finding::KIND_PARSE)
+      expect(result.kind).to eq(SpecGuard::Client::Finding::KIND_PARSE)
     end
 
     # `line: null` is the document's way of saying "not line-scoped", which is
@@ -639,7 +639,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       result = only_result(file: "a_spec.rb", line: nil, ok: false, kind: "read",
                            errors: ["could not read file: boom"])
 
-      expect(result.kind).to eq(SpecGuard::RSpec::Finding::KIND_READ)
+      expect(result.kind).to eq(SpecGuard::Client::Finding::KIND_READ)
       expect(result.location).to eq("a_spec.rb")
       expect(result.problem).to eq("could not read file: boom")
     end
@@ -671,7 +671,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "handle a no-match path", behavior: "a path that matched nothing is classified as a read failure", layer: "integration" }
     it "classifies it as a read failure" do
-      expect(no_match_result("spec/nope_spec.rb").kind).to eq(SpecGuard::RSpec::Finding::KIND_READ)
+      expect(no_match_result("spec/nope_spec.rb").kind).to eq(SpecGuard::Client::Finding::KIND_READ)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "handle a no-match path", behavior: "the no-match finding is a failed result so the run still exits one", layer: "integration" }
@@ -756,19 +756,19 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "output that is not JSON is refused", layer: "integration" }
     it "refuses output that is not JSON" do
       expect { run_backend(["a_spec.rb"], stdout: "not json at all\n") }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /did not emit a JSON document/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /did not emit a JSON document/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "an empty stdout is refused", layer: "integration" }
     it "refuses an empty stdout" do
       expect { run_backend(["a_spec.rb"], stdout: "") }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /did not emit a JSON document/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /did not emit a JSON document/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a JSON document that is not an object is refused", layer: "integration" }
     it "refuses a JSON document that is not an object" do
       expect { run_backend(["a_spec.rb"], stdout: "[]\n") }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /where a JSON object was expected/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /where a JSON object was expected/)
     end
 
     # If the argument vector ever stops saying `--source`, the document says so
@@ -777,25 +777,25 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a document announcing another mode is refused", layer: "integration" }
     it "refuses a document announcing another mode" do
       expect { run_backend(["a_spec.rb"], stdout: document([ok_finding], mode: "adopter")) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /reported mode "adopter"/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /reported mode "adopter"/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a document with no findings array is refused", layer: "integration" }
     it "refuses a document with no findings array" do
       expect { run_backend(["a_spec.rb"], stdout: '{"mode":"source","summary":{"annotations":0}}') }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /no `findings` array/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /no `findings` array/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a findings entry that is not an object is refused", layer: "integration" }
     it "refuses a findings entry that is not an object" do
       expect { run_backend(["a_spec.rb"], stdout: '{"mode":"source","summary":{"annotations":0},"findings":["x"]}') }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /not a JSON object/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /not a JSON object/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a document with no integer annotation count is refused", layer: "integration" }
     it "refuses a document with no integer annotation count" do
       expect { run_backend(["a_spec.rb"], stdout: '{"mode":"source","summary":{},"findings":[]}') }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /no integer `summary.annotations`/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /no integer `summary.annotations`/)
     end
 
     # `summary.annotations` and the findings list are two independent statements
@@ -804,7 +804,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "an annotation count that disagrees with the findings is refused", layer: "integration" }
     it "refuses a document whose annotation count disagrees with its findings" do
       expect { run_backend(["a_spec.rb"], stdout: document([ok_finding], annotations: 7)) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /reported 7 annotation\(s\) but emitted 1/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /reported 7 annotation\(s\) but emitted 1/)
     end
 
     # A kind this file has not been taught would be rendered under whichever
@@ -815,7 +815,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         run_backend(["a_spec.rb"],
                     stdout: document([{ file: "a_spec.rb", line: 1, ok: false,
                                         kind: "cosmic-ray", errors: ["boom"] }]))
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /unknown kind "cosmic-ray"/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /unknown kind "cosmic-ray"/)
     end
 
     # The `problem` kinds render as ONE em-dashed line. Joining several errors
@@ -826,7 +826,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         run_backend(["a_spec.rb"],
                     stdout: document([{ file: "a_spec.rb", line: 1, ok: false,
                                         kind: "extraction", errors: %w[one two] }]))
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /emitted 2 errors on a extraction finding/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /emitted 2 errors on a extraction finding/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "more than one error on a read finding is refused", layer: "integration" }
@@ -835,7 +835,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         run_backend(["a_spec.rb"],
                     stdout: document([{ file: "a_spec.rb", line: nil, ok: false,
                                         kind: "read", errors: %w[one two] }]))
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /emitted 2 errors on a read finding/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /emitted 2 errors on a read finding/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a failing finding carrying no errors is refused", layer: "integration" }
@@ -843,7 +843,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       expect do
         run_backend(["a_spec.rb"],
                     stdout: document([{ file: "a_spec.rb", line: 1, ok: false, kind: "schema", errors: [] }]))
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /with no errors/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /with no errors/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a passing finding carrying a kind is refused", layer: "integration" }
@@ -851,7 +851,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       expect do
         run_backend(["a_spec.rb"],
                     stdout: document([{ file: "a_spec.rb", line: 1, ok: true, kind: "schema", errors: [] }]))
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /passing finding/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /passing finding/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a finding with no file is refused", layer: "integration" }
@@ -860,7 +860,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         run_backend(["a_spec.rb"],
                     stdout: '{"mode":"source","summary":{"annotations":1},' \
                             '"findings":[{"line":1,"ok":true,"kind":null,"errors":[]}]}')
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /no `file`/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /no `file`/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a finding whose errors are not strings is refused", layer: "integration" }
@@ -869,7 +869,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         run_backend(["a_spec.rb"],
                     stdout: '{"mode":"source","summary":{"annotations":1},' \
                             '"findings":[{"file":"a_spec.rb","line":1,"ok":false,"kind":"schema","errors":[7]}]}')
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /not a list of strings/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /not a list of strings/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "refuse malformed reports", behavior: "a non-integer line is refused", layer: "integration" }
@@ -878,7 +878,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         run_backend(["a_spec.rb"],
                     stdout: '{"mode":"source","summary":{"annotations":1},' \
                             '"findings":[{"file":"a_spec.rb","line":"9","ok":true,"kind":null,"errors":[]}]}')
-      end.to raise_error(SpecGuard::RSpec::ValidatorError, /non-integer `line`/)
+      end.to raise_error(SpecGuard::Client::ValidatorError, /non-integer `line`/)
     end
   end
 
@@ -903,7 +903,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend::Runner", action: "read exit codes", behavior: "a two exit from the binary is refused as its own could-not-do-my-job code", layer: "integration" }
     it "refuses 2 — the port's own 'I could not do my job' code" do
       expect { run_backend(["a_spec.rb"], stdout: "", stderr: "error: could not load schema x\n", exit_code: 2) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /exited 2/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /exited 2/)
     end
 
     # Without this the operator gets "it exited 2" and nothing to act on, while
@@ -911,13 +911,13 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend::Runner", action: "read exit codes", behavior: "the refusal quotes the binary stderr, where it explained itself", layer: "integration" }
     it "quotes the binary's stderr, which is where it explained itself" do
       expect { run_backend(["a_spec.rb"], stdout: "", stderr: "error: could not load schema x\n", exit_code: 2) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /could not load schema x/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /could not load schema x/)
     end
 
     # @intent: { entity: "ValidatorBackend::Runner", action: "read exit codes", behavior: "any other exit code is refused", layer: "integration" }
     it "refuses any other code" do
       expect { run_backend(["a_spec.rb"], stdout: document([ok_finding]), exit_code: 3) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /exited 3/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /exited 3/)
     end
 
     # A binary deleted or chmod'ed between .resolve and the first batch.
@@ -928,7 +928,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       File.delete(path)
 
       expect { runner.check(["a_spec.rb"]) }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /could not be executed/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /could not be executed/)
     end
   end
 
@@ -986,7 +986,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     it "exits with the recorded verdict's code" do
       *, go_code = run_cli({ described_class::ENV_VAR => stub_validator(stdout: recorded, exit_code: 1) })
 
-      expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+      expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
     end
 
     # Non-vacuity, in the shape a two-sided comparison needs at
@@ -1011,7 +1011,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       def run_json_cli(env)
         stdout = StringIO.new
         stderr = StringIO.new
-        code = SpecGuard::RSpec::CLI.new(stdout: stdout, stderr: stderr, env: env).run(["--json", *paths])
+        code = SpecGuard::Client::CLI.new(stdout: stdout, stderr: stderr, env: env).run(["--json", *paths])
         [stdout.string, stderr.string, code]
       end
 
@@ -1030,7 +1030,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       it "exits with the recorded verdict's code" do
         *, go_code = run_json_cli(go_env)
 
-        expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+        expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
       end
 
       # Same non-vacuity argument as above, and it bites harder here: an empty
@@ -1146,7 +1146,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     it "exits 1 — a divergent message is still a malformed annotation" do
       (*, _, go_code) = both_ways.first
 
-      expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+      expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "replay the parse-failure corpus", behavior: "stderr stays empty beyond the line naming the validator", layer: "integration" }
@@ -1193,7 +1193,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   # ENUMERATED DIFFERENCE 2 of 4 — a file that is not well-formed UTF-8.
   #
   # `Scanner#scan_text` has carried a RATIFIED DIFFERENCE note about this shape
-  # since it was written (lib/specguard/rspec/scanner.rb, at `scan_text`),
+  # since it was written (lib/specguard/client/scanner.rb, at `scan_text`),
   # quoting both wordings in place. Neither was asserted by anything until this
   # block: the citation was re-pointed at this file by SPGD-403 and the
   # comparison was never ported, so the Go side's wording could have moved with
@@ -1272,7 +1272,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     it "exits 1 — an unreadable spec file is still a failed run" do
       (*, _, go_code) = both_ways.first
 
-      expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+      expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "replay the UTF-8 corpus", behavior: "stderr stays empty beyond the line naming the validator", layer: "integration" }
@@ -1320,7 +1320,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       text = ("# a spec file\n".b + "\xC3\x28".b + "\n".b).force_encoding(Encoding::UTF_8)
       expect(text.valid_encoding?).to be(false)
 
-      problems = SpecGuard::RSpec::Scanner.scan_text(text, file: paths.first).map(&:problem)
+      problems = SpecGuard::Client::Scanner.scan_text(text, file: paths.first).map(&:problem)
 
       expect(problems).to eq(["could not read file: invalid UTF-8 byte sequence"])
       expect(problems.first).not_to include("input is not well-formed UTF-8")
@@ -1451,7 +1451,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     it "exits 1 — an unreadable path is still a failed run" do
       (*, _, go_code) = both_ways.first
 
-      expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+      expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
     end
 
     # @intent: { entity: "ValidatorBackend", action: "replay the non-regular-path corpus", behavior: "stderr stays empty beyond the line naming the validator", layer: "integration" }
@@ -1527,7 +1527,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   # holds fixed. Documented and pinned instead, so nobody reads the gap as
   # drift: the roadmap that owned the binary (SPGD-96) completed 2026-09-06,
   # having removed the schema-application arm it could remove (`c9dca61`; see
-  # the header of `lib/specguard/rspec/linter.rb` for the survivor shape), and
+  # the header of `lib/specguard/client/linter.rb` for the survivor shape), and
   # this input half is what survived that cutover on purpose.
   describe "the JSON acceptance set" do
     def parses?(doc)
@@ -1625,7 +1625,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         (*, ruby_code), (*, go_code) = both_ways
 
         expect(go_code).to eq(ruby_code)
-        expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+        expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
       end
 
       # @intent: { entity: "ValidatorBackend", action: "replay the section 1.1 corpus", behavior: "stderr stays empty beyond the line naming the validator", layer: "integration" }
@@ -1700,7 +1700,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       it "fails the run — §1.1(a) refuses an unpaired low surrogate" do
         (*, _, go_code) = both_ways.first
 
-        expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+        expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
       end
 
       # @intent: { entity: "ValidatorBackend", action: "replay the lone-surrogate corpus", behavior: "the finding names the annotation, the line and the clause", layer: "integration" }
@@ -1764,7 +1764,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # documents rather than inferred from the text report's shape.
       def run_json(env)
         stdout = StringIO.new
-        SpecGuard::RSpec::CLI.new(stdout: stdout, stderr: StringIO.new, env: env).run(["--json", *paths])
+        SpecGuard::Client::CLI.new(stdout: stdout, stderr: StringIO.new, env: env).run(["--json", *paths])
         stdout.string
       end
 
@@ -1779,7 +1779,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       it "fails the run and names the deep annotation" do
         (go_stdout, *, go_code) = both_ways.first
 
-        expect(go_code).to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+        expect(go_code).to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
         expect(go_stdout).to include("checked 2 @intent annotations, 1 malformed")
         expect(go_stdout).to include("acceptance_set_classification_spec.rb:36")
       end
@@ -1931,7 +1931,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend", action: "recover a high-surrogate document", behavior: "a document that is simply broken is not rescued", layer: "integration" }
     it "does not rescue a document that is simply broken" do
       expect { results_for("this is not JSON at all") }
-        .to raise_error(SpecGuard::RSpec::ValidatorError, /did not emit a JSON document/)
+        .to raise_error(SpecGuard::Client::ValidatorError, /did not emit a JSON document/)
     end
   end
 
@@ -1945,14 +1945,14 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     let(:stderr) { StringIO.new }
 
     def run_with(env_value, argv = ["spec/fixtures/order_spec.rb"])
-      SpecGuard::RSpec::CLI
+      SpecGuard::Client::CLI
         .new(stdout: stdout, stderr: stderr, env: { described_class::ENV_VAR => env_value })
         .run(argv)
     end
 
     # @intent: { entity: "specguard-lint exit contract", action: "gate on resolution", behavior: "a missing binary exits two through the CLI, not one", layer: "integration" }
     it "exits 2, not 1, when the binary does not exist" do
-      expect(run_with(File.join(tmpdir, "nope"))).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+      expect(run_with(File.join(tmpdir, "nope"))).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
     end
 
     # @intent: { entity: "specguard-lint exit contract", action: "gate on resolution", behavior: "a non-executable binary exits two the same way", layer: "integration" }
@@ -1961,25 +1961,25 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       File.write(path, "")
       FileUtils.chmod(0o644, path)
 
-      expect(run_with(path)).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+      expect(run_with(path)).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
     end
 
     # @intent: { entity: "specguard-lint exit contract", action: "gate on resolution", behavior: "a binary exiting two itself exits two, not one", layer: "integration" }
     it "exits 2, not 1, when the binary exits 2" do
       expect(run_with(stub_validator(stderr: "error: could not load schema x\n", exit_code: 2)))
-        .to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        .to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
     end
 
     # @intent: { entity: "specguard-lint exit contract", action: "gate on resolution", behavior: "unparseable binary output exits two", layer: "integration" }
     it "exits 2, not 1, when the binary emits unparseable output" do
       expect(run_with(stub_validator(stdout: "{ not json", exit_code: 1)))
-        .to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        .to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
     end
 
     # @intent: { entity: "specguard-lint exit contract", action: "gate on resolution", behavior: "a non-zero exit with unparseable output also exits two", layer: "integration" }
     it "exits 2, not 1, when the binary exits non-zero with unparseable output" do
       expect(run_with(stub_validator(stdout: "boom", exit_code: 1)))
-        .to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        .to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
     end
 
     # The wording matters as much as the code: `internal error:` tells the
@@ -2004,7 +2004,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # returns before anything is resolved.
     # @intent: { entity: "specguard-lint exit contract", action: "answer help anyway", behavior: "help still answers when the configured binary is missing", layer: "integration" }
     it "still answers --help when the configured binary is missing" do
-      expect(run_with(File.join(tmpdir, "nope"), ["--help"])).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+      expect(run_with(File.join(tmpdir, "nope"), ["--help"])).to eq(SpecGuard::Client::CLI::EXIT_OK)
       expect(stdout.string).to include("Usage: specguard-lint")
     end
 
@@ -2012,12 +2012,12 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # before the backend is ever consulted.
     # @intent: { entity: "specguard-lint exit contract", action: "answer help anyway", behavior: "the changed-with-files refusal still works with a missing binary", layer: "integration" }
     it "still refuses --changed combined with explicit files" do
-      code = SpecGuard::RSpec::CLI
+      code = SpecGuard::Client::CLI
              .new(stdout: stdout, stderr: stderr,
                   env: { described_class::ENV_VAR => stub_validator(stdout: document([ok_finding])) })
              .run(["--changed", "spec/fixtures/order_spec.rb"])
 
-      expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+      expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       expect(stderr.string).to include("--changed cannot be combined with explicit files")
     end
   end
@@ -2151,7 +2151,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
       # @intent: { entity: "ValidatorBackend", action: "tolerate identity-less binaries", behavior: "an answer longer than the line budget is refused", layer: "integration" }
       it "refuses an answer longer than the line budget" do
-        giant = "v#{'9' * SpecGuard::RSpec::ValidatorBackend::Runner::IDENTITY_MAX_BYTES}"
+        giant = "v#{'9' * SpecGuard::Client::ValidatorBackend::Runner::IDENTITY_MAX_BYTES}"
 
         expect(unidentified(version_stdout: giant).identity).to be_nil
       end
@@ -2178,7 +2178,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         stub = clean_stub(version_stdout: "validate-intent \xFF\xFE")
         stdout, stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stderr).not_to include("internal error")
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
@@ -2191,7 +2191,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         stub = clean_stub(version_stdout: "", version_exit: 1)
         stdout, _stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
 
@@ -2380,7 +2380,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       it "runs normally, changing neither stdout nor the exit code" do
         stdout, _stderr, code = run_cli({ described_class::ENV_VAR => clean_stub })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
 
@@ -2438,14 +2438,14 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # @intent: { entity: "ValidatorBackend schema contract", action: "refuse a divergent digest", behavior: "a binary carrying a different schema refuses to resolve", layer: "integration" }
       it "refuses to resolve" do
         expect { resolve(version_stdout: identity_reporting(foreign_digest)) }
-          .to raise_error(SpecGuard::RSpec::ValidatorError)
+          .to raise_error(SpecGuard::Client::ValidatorError)
       end
 
       # @intent: { entity: "ValidatorBackend schema contract", action: "refuse a divergent digest", behavior: "the refusal exits two, not a verdict about annotations", layer: "integration" }
       it "exits 2, not 1 — this is not a verdict about anyone's annotations" do
         _, _, code = run_cli({ described_class::ENV_VAR => diverging_stub })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       end
 
       # Both digests, in full. One of them lives inside a binary and the other
@@ -2495,8 +2495,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         clean = run_cli({ described_class::ENV_VAR => clean_stub(name: "agreeing") })
         diverged = run_cli({ described_class::ENV_VAR => diverging_stub(name: "diverging") })
 
-        expect(clean[2]).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
-        expect(diverged[2]).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        expect(clean[2]).to eq(SpecGuard::Client::CLI::EXIT_OK)
+        expect(diverged[2]).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       end
     end
 
@@ -2519,7 +2519,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         stub = clean_stub(version_stdout: "validate-intent 1.4.0 (go1.22.12 linux/arm64)")
         stdout, _stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
 
@@ -2557,7 +2557,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         stdout, _stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
         expect(runner.schema_contract).to eq(:unidentified)
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
 
@@ -2595,7 +2595,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # would pass for the wrong reason.
       before do
         @healthy_digest = vendored_digest
-        stub_const("SpecGuard::RSpec::SCHEMA_PATH", File.join(tmpdir, "not-vendored.json"))
+        stub_const("SpecGuard::Client::SCHEMA_PATH", File.join(tmpdir, "not-vendored.json"))
       end
 
       def unreadable_stub(**stub)
@@ -2615,7 +2615,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         stdout, _stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
         expect(runner.schema_contract).to eq(:unreadable)
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
 
@@ -2642,7 +2642,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
                 .map { |stub| run_cli({ described_class::ENV_VAR => stub }) }
 
       expect(stdouts.map(&:first).uniq.length).to eq(1)
-      expect(stdouts.map(&:last).uniq).to eq([SpecGuard::RSpec::CLI::EXIT_OK])
+      expect(stdouts.map(&:last).uniq).to eq([SpecGuard::Client::CLI::EXIT_OK])
     end
 
     # @intent: { entity: "ValidatorBackend schema contract", action: "keep stdout stable", behavior: "only the provenance line moves between those bands", layer: "integration" }
@@ -2836,7 +2836,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # the patterns are confused rather than when either is merely absent.
       # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "read the recorded answer", behavior: "that line is not readable by the identity pattern, which is why there are two probes", layer: "integration" }
       it "is not readable by the identity pattern, which is why there are two" do
-        pattern = SpecGuard::RSpec::ValidatorBackend::Runner::SCHEMA_DIGEST_PATTERN
+        pattern = SpecGuard::Client::ValidatorBackend::Runner::SCHEMA_DIGEST_PATTERN
 
         expect(recorded_source("embedded")[pattern, 1]).to be_nil
         expect(recorded_source("on_disk")[pattern, 1]).to be_nil
@@ -2876,7 +2876,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       it "runs normally, changing neither stdout nor the exit code" do
         stdout, _stderr, code = run_cli({ described_class::ENV_VAR => recorded_stub("embedded") })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
 
@@ -2908,8 +2908,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
                                  recorded_stub("embed_differs", name: "recorded-embed-differs-old",
                                                                 **without_schema_source) })
 
-        expect(with_flag[2]).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
-        expect(without_flag[2]).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        expect(with_flag[2]).to eq(SpecGuard::Client::CLI::EXIT_OK)
+        expect(without_flag[2]).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       end
     end
 
@@ -2924,7 +2924,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "refuse an enforcing stranger", behavior: "the divergent binary carries the vendored digest, so the older comparison saw nothing wrong", layer: "integration" }
       it "carries the digest the gem vendors, so the old comparison saw nothing wrong" do
         carried = recorded("disk_wins").fetch("version").fetch("stdout")[
-          SpecGuard::RSpec::ValidatorBackend::Runner::SCHEMA_DIGEST_PATTERN, 1
+          SpecGuard::Client::ValidatorBackend::Runner::SCHEMA_DIGEST_PATTERN, 1
         ]
 
         expect(carried).to eq(vendored_digest)
@@ -2933,14 +2933,14 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
       # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "refuse an enforcing stranger", behavior: "a binary whose runs load a schema the gem does not vendor refuses to resolve", layer: "integration" }
       it "refuses to resolve" do
-        expect { resolve_recorded("disk_wins") }.to raise_error(SpecGuard::RSpec::ValidatorError)
+        expect { resolve_recorded("disk_wins") }.to raise_error(SpecGuard::Client::ValidatorError)
       end
 
       # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "refuse an enforcing stranger", behavior: "the refusal exits two, not a verdict about annotations", layer: "integration" }
       it "exits 2, not 1 — this is not a verdict about anyone's annotations" do
         _, _, code = run_cli({ described_class::ENV_VAR => recorded_stub("disk_wins") })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       end
 
       # Both digests and the ORIGIN. The origin is the half the carried message
@@ -2982,8 +2982,8 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         as_before = run_cli({ described_class::ENV_VAR =>
                               recorded_stub("disk_wins", name: "recorded-disk-wins-old", **without_schema_source) })
 
-        expect(refused[2]).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
-        expect(as_before[2]).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(refused[2]).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
+        expect(as_before[2]).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(provenance_lines(as_before[1]).first).to include("reports carrying the schema this gem vendors")
       end
     end
@@ -3020,7 +3020,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
                   "#{recorded('unsupported').fetch('version').fetch('stdout').chomp} at #{stub} " \
                   "(SPECGUARD_VALIDATE_INTENT), which reports carrying the schema this gem vendors — " \
                   "the contract it carries, not necessarily the one this run enforced"])
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
         expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
       end
 
@@ -3055,7 +3055,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
                              stderr: broken.fetch("stderr"), exit_code: broken.fetch("exit"))
         _, stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
         expect(error_lines(stderr).first).to include("could not load schema")
       end
 
@@ -3090,7 +3090,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
 
       # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "bound the answer", behavior: "an answer longer than the line budget counts as unavailable", layer: "integration" }
       it "treats an answer longer than the line budget as unavailable" do
-        giant = "schema #{'x' * SpecGuard::RSpec::ValidatorBackend::Runner::SCHEMA_SOURCE_MAX_BYTES} " \
+        giant = "schema #{'x' * SpecGuard::Client::ValidatorBackend::Runner::SCHEMA_SOURCE_MAX_BYTES} " \
                 "sha256:#{vendored_digest}"
         runner = described_class.resolve(
           env: { described_class::ENV_VAR =>
@@ -3197,10 +3197,10 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "ask once and in order", behavior: "the probe does not run when resolution fails", layer: "integration" }
       it "does not run when resolution fails" do
         allow(described_class::Installer).to receive(:obtain)
-          .and_raise(SpecGuard::RSpec::ValidatorError, "could not obtain validate-intent")
+          .and_raise(SpecGuard::Client::ValidatorError, "could not obtain validate-intent")
 
         expect { described_class.resolve(env: {}) }
-          .to raise_error(SpecGuard::RSpec::ValidatorError)
+          .to raise_error(SpecGuard::Client::ValidatorError)
         expect(schema_source_probes).to be_empty
       end
     end
@@ -3215,7 +3215,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
                 .map { |name| run_cli({ described_class::ENV_VAR => recorded_stub(name) }) }
 
       expect(stdouts.map(&:first).uniq.length).to eq(1)
-      expect(stdouts.map(&:last).uniq).to eq([SpecGuard::RSpec::CLI::EXIT_OK])
+      expect(stdouts.map(&:last).uniq).to eq([SpecGuard::Client::CLI::EXIT_OK])
     end
 
     # Each band is a different statement and must be worded as one: an operator
@@ -3255,7 +3255,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       stub = recorded_stub("disk_wins", name: "diverged-anonymous", version_stdout: "", version_exit: 1)
       _, stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
-      expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+      expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       expect(error_lines(stderr).first).to include("the binary could not identify itself")
     end
 
@@ -3268,11 +3268,11 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "word the bands", behavior: "no refusal happens when the gem cannot read its own vendored schema", layer: "integration" }
     it "does not refuse when the gem cannot read its own vendored schema" do
       stub = recorded_stub("disk_wins", name: "no-vendored-copy")
-      stub_const("SpecGuard::RSpec::SCHEMA_PATH", File.join(tmpdir, "not-vendored.json"))
+      stub_const("SpecGuard::Client::SCHEMA_PATH", File.join(tmpdir, "not-vendored.json"))
       stdout, _stderr, code = run_cli({ described_class::ENV_VAR => stub })
 
       expect(described_class.resolve(env: { described_class::ENV_VAR => stub }).schema_contract).to eq(:unreadable)
-      expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_OK)
+      expect(code).to eq(SpecGuard::Client::CLI::EXIT_OK)
       expect(stdout).to include("specguard-lint: checked 1 @intent annotation, 0 malformed")
     end
 
@@ -3304,7 +3304,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # is asserted here rather than folded into the loop above.
     # @intent: { entity: "ValidatorBackend enforced-schema probe", action: "document the clauses", behavior: "the unreadable-vendored-copy clause is documented too", layer: "integration" }
     it "documents the unreadable-vendored-copy clause too" do
-      stub_const("SpecGuard::RSpec::SCHEMA_PATH", File.join(tmpdir, "not-vendored.json"))
+      stub_const("SpecGuard::Client::SCHEMA_PATH", File.join(tmpdir, "not-vendored.json"))
       clause = provenance_of({ described_class::ENV_VAR => recorded_stub("embedded") })[
         /\(SPECGUARD_VALIDATE_INTENT\)(.*)\z/, 1
       ]
@@ -3358,18 +3358,18 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     it "refuses the retired flag as an unknown option" do
       _, stderr, code = run_cli({}, ["--require-validator", *paths])
 
-      expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+      expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       expect(error_lines(stderr).first).to include("invalid option")
     end
 
     # @intent: { entity: "specguard-lint resolution gate", action: "gate every run", behavior: "a run with no obtainable binary exits two, not one and not a crash", layer: "integration" }
     it "exits 2 when no binary can be obtained, not 1 and not a crash" do
       allow(described_class::Installer).to receive(:obtain)
-        .and_raise(SpecGuard::RSpec::ValidatorError, "could not obtain validate-intent: no network")
+        .and_raise(SpecGuard::Client::ValidatorError, "could not obtain validate-intent: no network")
       _, stderr, code = run_cli({}, paths)
 
-      expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
-      expect(code).not_to eq(SpecGuard::RSpec::CLI::EXIT_MALFORMED)
+      expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
+      expect(code).not_to eq(SpecGuard::Client::CLI::EXIT_MALFORMED)
       expect(stderr).not_to include("internal error")
     end
 
@@ -3378,7 +3378,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "specguard-lint resolution gate", action: "gate every run", behavior: "the refusal names the env var and the install script alternative", layer: "integration" }
     it "names the env var and the install.sh alternative" do
       allow(described_class::Installer).to receive(:obtain)
-        .and_raise(SpecGuard::RSpec::ValidatorError, described_class::Installer::REMEDIATIONS)
+        .and_raise(SpecGuard::Client::ValidatorError, described_class::Installer::REMEDIATIONS)
       _, stderr, = run_cli({}, paths)
 
       expect(error_lines(stderr).first).to include("SPECGUARD_VALIDATE_INTENT")
@@ -3388,7 +3388,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
     # @intent: { entity: "specguard-lint resolution gate", action: "gate every run", behavior: "nothing is selected, scanned or reported when the gate refuses", layer: "integration" }
     it "selects, scans and reports nothing" do
       allow(described_class::Installer).to receive(:obtain)
-        .and_raise(SpecGuard::RSpec::ValidatorError, "could not obtain validate-intent")
+        .and_raise(SpecGuard::Client::ValidatorError, "could not obtain validate-intent")
       stdout, stderr, = run_cli({}, paths)
 
       expect(stdout).to be_empty
@@ -3403,7 +3403,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       missing = File.join(tmpdir, "not-there")
       _, stderr, code = run_cli({ described_class::ENV_VAR => missing }, paths)
 
-      expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+      expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
       expect(error_lines(stderr).first).to include("does not exist")
     end
   end
@@ -3413,7 +3413,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
   # production code itself owns (Net::HTTP behind one method). What is pinned
   # is the CONTRACT: platform mapping, cache reuse, SHA256SUMS verification,
   # atomic install, and the exit-2 refusal naming both remediations.
-  describe SpecGuard::RSpec::ValidatorBackend::Installer do
+  describe SpecGuard::Client::ValidatorBackend::Installer do
     subject(:installer) { described_class }
 
     let(:cache_root) { File.join(tmpdir, "cache") }
@@ -3444,7 +3444,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
       # @intent: { entity: "ValidatorBackend::Installer", action: "map platform assets", behavior: "an unsupported platform is refused naming both remediations", layer: "unit" }
       it "refuses an unsupported platform, naming both remediations" do
         expect { installer.asset_name(platform: "x86_64-freebsd") }
-          .to raise_error(SpecGuard::RSpec::ValidatorError, /freebsd.*SPECGUARD_VALIDATE_INTENT.*install\.sh/m)
+          .to raise_error(SpecGuard::Client::ValidatorError, /freebsd.*SPECGUARD_VALIDATE_INTENT.*install\.sh/m)
       end
     end
 
@@ -3488,7 +3488,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         stub_download_with(manifest_text: "#{Digest::SHA256.hexdigest("other")}  #{asset}\n")
 
         expect { installer.obtain(env: env) }
-          .to raise_error(SpecGuard::RSpec::ValidatorError, /has sha256:.*but the release manifest says/)
+          .to raise_error(SpecGuard::Client::ValidatorError, /has sha256:.*but the release manifest says/)
         expect(Dir[File.join(cache_root, "**", "*")]).to be_empty
       end
 
@@ -3497,7 +3497,7 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         stub_download_with(manifest_text: "#{digest}  some-other-asset\n")
 
         expect { installer.obtain(env: env) }
-          .to raise_error(SpecGuard::RSpec::ValidatorError, /does not describe/)
+          .to raise_error(SpecGuard::Client::ValidatorError, /does not describe/)
       end
 
       # @intent: { entity: "ValidatorBackend::Installer", action: "obtain the binary", behavior: "a network failure is wrapped in the exit-two refusal with both remediations", layer: "unit" }
@@ -3505,16 +3505,16 @@ RSpec.describe SpecGuard::RSpec::ValidatorBackend do
         allow(installer).to receive(:download).and_raise(SocketError, "no network")
 
         expect { installer.obtain(env: env) }
-          .to raise_error(SpecGuard::RSpec::ValidatorError,
+          .to raise_error(SpecGuard::Client::ValidatorError,
                           /could not obtain validate-intent.*SocketError.*SPECGUARD_VALIDATE_INTENT.*install\.sh/m)
       end
 
       # @intent: { entity: "ValidatorBackend::Installer", action: "obtain the binary", behavior: "an HTTP error is not installed over", layer: "unit" }
       it "does not install over an HTTP error" do
         allow(installer).to receive(:download)
-          .and_raise(SpecGuard::RSpec::ValidatorError, "fetching #{installer::DOWNLOAD_BASE}/SHA256SUMS answered HTTP 404")
+          .and_raise(SpecGuard::Client::ValidatorError, "fetching #{installer::DOWNLOAD_BASE}/SHA256SUMS answered HTTP 404")
 
-        expect { installer.obtain(env: env) }.to raise_error(SpecGuard::RSpec::ValidatorError, /HTTP 404/)
+        expect { installer.obtain(env: env) }.to raise_error(SpecGuard::Client::ValidatorError, /HTTP 404/)
         expect(Dir[File.join(cache_root, "**", "*")]).to be_empty
       end
     end

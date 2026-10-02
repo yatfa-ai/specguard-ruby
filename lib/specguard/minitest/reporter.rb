@@ -4,11 +4,11 @@ require "json"
 require "fileutils"
 
 # Configuration and Transport are the framework-free halves of the client
-# (env resolution, wire delivery, the never-raise contract); both live under
-# the rspec namespace because rspec shipped first, neither contains any RSpec.
-# Required here rather than assumed because nothing else loads them on a
-# minitest-only consumer's machine.
-require_relative "../rspec/configuration"
+# (env resolution, wire delivery, the never-raise contract), under
+# `SpecGuard::Client`. Required here rather than assumed because nothing else
+# loads them on a minitest-only consumer's machine.
+require_relative "../client"
+require_relative "../client/configuration"
 
 # The annotation lookup is the third framework-free half: what counts as a
 # test's annotation is a property of the source line, not of the framework
@@ -17,20 +17,19 @@ require_relative "../rspec/configuration"
 # already warns that a second extractor guarantees scanner and reporter
 # eventually disagree about what an annotation is). Requiring it pulls the
 # linter's chain — the same direction-safe require the formatter itself makes;
-# `specguard/rspec` does not require `rspec/core`, so a minitest-only machine
+# `specguard/client` does not require `rspec/core`, so a minitest-only machine
 # stays loadable.
-require_relative "../rspec/annotation_lookup"
+require_relative "../client/annotation_lookup"
 
 # The Minitest half of `specguard-ruby`. Everything the RSpec formatter knows
 # about the platform — the envelope's field names, the transport's
 # never-raise contract, the switch that a missing key is — is framework-free
-# knowledge that already lives in `SpecGuard::RSpec::Configuration` and
-# `SpecGuard::RSpec::Transport` (both named for the framework that happened to
-# ship first, neither containing any RSpec). This adapter contributes only the
+# knowledge that already lives in `SpecGuard::Client::Configuration` and
+# `SpecGuard::Client::Transport`. This adapter contributes only the
 # part that is genuinely Minitest's: turning `Minitest::Result` objects into
 # the same row shape the RSpec formatter emits, at the moment Minitest hands
 # them to a reporter — and attaching each test's annotation the same way the
-# formatter does, through the shared {SpecGuard::RSpec::AnnotationLookup} and
+# formatter does, through the shared {SpecGuard::Client::AnnotationLookup} and
 # its one-line lookback (SPGD-12 §2), so a Minitest row carries the same
 # `status` / `intent` pair a RSpec row does.
 #
@@ -78,7 +77,7 @@ module SpecGuard
         end
       end
 
-      def initialize(configuration: SpecGuard::RSpec.configuration,
+      def initialize(configuration: SpecGuard.configuration,
                      transport: nil, output: $stderr,
                      annotations: nil,
                      clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
@@ -108,7 +107,7 @@ module SpecGuard
         # binds one root, hands it to the default lookup, and pins rspec-core's
         # lazily memoized relativization regex to the same moment.)
         root = self.class.repo_root
-        @annotations = annotations || SpecGuard::RSpec::AnnotationLookup.new(root: root)
+        @annotations = annotations || SpecGuard::Client::AnnotationLookup.new(root: root)
         @clock = clock
         @rows = []
         @started_at = nil
@@ -244,8 +243,8 @@ module SpecGuard
       end
 
       def transport_for
-        require_relative "../rspec/transport"
-        SpecGuard::RSpec::Transport.new(
+        require_relative "../client/transport"
+        SpecGuard::Client::Transport.new(
           endpoint: @configuration.endpoint,
           api_key: @configuration.api_key,
           timeout: @configuration.timeout

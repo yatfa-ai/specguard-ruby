@@ -3,7 +3,7 @@
 require "json"
 
 module SpecGuard
-  module RSpec
+  module Client
     # `specguard-ingest --json`: the machine-readable renderer over the same
     # per-line facts the human report is built from.
     #

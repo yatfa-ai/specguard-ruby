@@ -13,7 +13,7 @@ require_relative "../../support/validator_stub"
 # implementation a typo'd FLAG makes CI accuse a developer of a bad annotation
 # that does not exist. These examples are what keeps 1 meaning one thing.
 RSpec.describe "the specguard-lint exit contract" do
-  subject(:cli) { SpecGuard::RSpec::CLI.new(stdout: stdout, stderr: stderr) }
+  subject(:cli) { SpecGuard::Client::CLI.new(stdout: stdout, stderr: stderr) }
 
   let(:stdout) { StringIO.new }
   let(:stderr) { StringIO.new }
@@ -25,7 +25,7 @@ RSpec.describe "the specguard-lint exit contract" do
   # validator through the first-run installer. The suite must not download, so
   # resolution is stubbed to the offline replay stub — see
   # spec/support/validator_stub.rb.
-  before { allow(SpecGuard::RSpec::ValidatorBackend::Installer).to receive(:obtain).and_return(ValidatorStub.install_stubbable) }
+  before { allow(SpecGuard::Client::ValidatorBackend::Installer).to receive(:obtain).and_return(ValidatorStub.install_stubbable) }
 
   describe "0 — clean" do
     # @intent: { entity: "specguard-lint exit contract", action: "exit clean", behavior: "a file whose annotations are all valid exits zero", layer: "unit" }
@@ -158,8 +158,8 @@ RSpec.describe "the specguard-lint exit contract" do
     # carry. See ValidatorBackend::Installer.
     describe "a validator that cannot be resolved" do
       before do
-        allow(SpecGuard::RSpec::ValidatorBackend::Installer)
-          .to receive(:obtain).and_raise(SpecGuard::RSpec::ValidatorError,
+        allow(SpecGuard::Client::ValidatorBackend::Installer)
+          .to receive(:obtain).and_raise(SpecGuard::Client::ValidatorError,
                                          "could not obtain validate-intent: no network")
       end
 
@@ -192,7 +192,7 @@ RSpec.describe "the specguard-lint exit contract" do
     describe "an unexpected internal exception" do
       # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "an unexpected exception maps to exit two rather than letting the Ruby default one stand", layer: "unit" }
       it "exits 2 rather than letting Ruby's default 1 stand" do
-        allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_raise("boom")
+        allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve).and_raise("boom")
 
         expect(cli.run([fixture_path("order_spec.rb")])).to eq(2)
       end
@@ -211,7 +211,7 @@ RSpec.describe "the specguard-lint exit contract" do
       # run emits no document").
       # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "an internal exception is labelled an internal error on stderr and stdout stays completely empty", layer: "unit" }
       it "reports it as an internal error, printing no document" do
-        allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_raise("boom")
+        allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve).and_raise("boom")
         cli.run([fixture_path("order_spec.rb")])
 
         expect(err).to include("specguard-lint: internal error: RuntimeError: boom")
@@ -220,7 +220,7 @@ RSpec.describe "the specguard-lint exit contract" do
 
       # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "a NoMethodError raised from deep inside the pipeline is caught and mapped to two", layer: "unit" }
       it "catches a NoMethodError from deep inside the pipeline too" do
-        allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_raise(NoMethodError, "undefined method")
+        allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve).and_raise(NoMethodError, "undefined method")
 
         expect(cli.run([fixture_path("order_spec.rb")])).to eq(2)
       end
@@ -229,7 +229,7 @@ RSpec.describe "the specguard-lint exit contract" do
       # Ruby exits 1 again.
       # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "a ScriptError, which a bare rescue misses, is still caught and mapped to two", layer: "unit" }
       it "catches a ScriptError, which a bare rescue would miss" do
-        allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_raise(NotImplementedError, "nope")
+        allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve).and_raise(NotImplementedError, "nope")
 
         expect(cli.run([fixture_path("order_spec.rb")])).to eq(2)
       end
@@ -238,7 +238,7 @@ RSpec.describe "the specguard-lint exit contract" do
       # would be its own small lie, and would make the tool un-interruptible.
       # @intent: { entity: "specguard-lint exit contract", action: "contain internal errors", behavior: "an interrupt is re-raised rather than swallowed, keeping ctrl-c working", layer: "unit" }
       it "does NOT swallow an interrupt" do
-        allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_raise(Interrupt)
+        allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve).and_raise(Interrupt)
 
         expect { cli.run([fixture_path("order_spec.rb")]) }.to raise_error(Interrupt)
       end
@@ -257,7 +257,7 @@ RSpec.describe "the specguard-lint exit contract" do
   describe "--json changes the renderer and nothing about the exit code" do
     def code_for(argv, chdir: nil)
       run = lambda do
-        SpecGuard::RSpec::CLI.new(stdout: StringIO.new, stderr: StringIO.new).run(argv)
+        SpecGuard::Client::CLI.new(stdout: StringIO.new, stderr: StringIO.new).run(argv)
       end
 
       chdir ? Dir.mktmpdir { |dir| Dir.chdir(dir) { run.call } } : run.call
@@ -289,9 +289,9 @@ RSpec.describe "the specguard-lint exit contract" do
     # than the arguments, and it is reached before any renderer is chosen.
     # @intent: { entity: "specguard-lint exit contract", action: "stay renderer-indifferent", behavior: "an unmet validator requirement exits two the same way with and without the json flag", layer: "unit" }
     it "exits 2 on an unmet --require-validator with and without the flag" do
-      plain = SpecGuard::RSpec::CLI.new(stdout: StringIO.new, stderr: StringIO.new, env: {})
+      plain = SpecGuard::Client::CLI.new(stdout: StringIO.new, stderr: StringIO.new, env: {})
                                    .run(["--require-validator", fixture_path("order_spec.rb")])
-      json = SpecGuard::RSpec::CLI.new(stdout: StringIO.new, stderr: StringIO.new, env: {})
+      json = SpecGuard::Client::CLI.new(stdout: StringIO.new, stderr: StringIO.new, env: {})
                                   .run(["--json", "--require-validator", fixture_path("order_spec.rb")])
 
       expect(json).to eq(plain)

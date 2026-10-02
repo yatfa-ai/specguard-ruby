@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "stringio"
-require "specguard/rspec/transport"
+require "specguard/client/transport"
 
 require_relative "../../support/stub_ingest_endpoint"
 
@@ -13,7 +13,7 @@ require_relative "../../support/stub_ingest_endpoint"
 # API key raises nothing — and the formatter's never-block-CI guard is a
 # `rescue`. Making both families the same {Result} shape is what gives the
 # caller one thing to check.
-RSpec.describe SpecGuard::RSpec::Transport do
+RSpec.describe SpecGuard::Client::Transport do
   let(:payload) do
     {
       "commit_sha" => "0d4a1f2c9b8e7d6a5f4c3b2a1908f7e6d5c4b3a2",

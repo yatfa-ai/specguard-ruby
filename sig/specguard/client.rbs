@@ -1,0 +1,9 @@
+module SpecGuard
+  module Client
+    class Error < StandardError
+    end
+
+    class Configuration
+    end
+  end
+end

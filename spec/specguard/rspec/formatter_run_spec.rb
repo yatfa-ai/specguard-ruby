@@ -9,7 +9,7 @@ require "fileutils"
 # its own require list), and `spec_helper` loads only that — so naming it here
 # is what makes this file safe to run alone, or under `--order random`, rather
 # than dependent on some other spec having pulled it in first.
-require "specguard/rspec/configuration"
+require "specguard/client/configuration"
 
 require_relative "../../support/stub_ingest_endpoint"
 require_relative "../../support/validator_stub"
@@ -207,15 +207,15 @@ module FormatterRunHelpers
   # lookup cannot control: an unreadable spec file, a spec file that is not
   # valid UTF-8, a vendored schema that will not compile.
   SABOTAGE = <<~RUBY
-    require "specguard/rspec"
+    require "specguard/client"
     # SPGD-867: sabotage the LOOKUP, not the Scanner. The backend path answers
     # from the validator's report and never calls `Scanner.scan_text`, so a
     # scanner sabotage would now be dead code — the failure mode this block
     # pins is "the annotation half blows up", whatever layer it blows up in.
-    # Runner is on the loaded chain (`specguard/rspec` requires it), and an
+    # Runner is on the loaded chain (`specguard/client` requires it), and an
     # IOError here is outside the ValidatorError band AnnotationLookup rescues,
     # so it reaches the formatter envelope exactly as the scanner raise did.
-    module SpecGuard::RSpec::ValidatorBackend
+    module SpecGuard::Client::ValidatorBackend
       class Runner
         def check(*) = raise(IOError, "sabotaged lookup")
       end
@@ -259,7 +259,7 @@ module FormatterRunHelpers
   # red on Actions and green everywhere else.
   #
   # The list is **derived**, not transcribed. Every variable the gem reads is
-  # named in one of {SpecGuard::RSpec::Configuration}'s `*_KEYS` constants, and
+  # named in one of {SpecGuard::Client::Configuration}'s `*_KEYS` constants, and
   # enumerating those constants — rather than the four, or the eight, that
   # happened to exist the day this was written — means a newly declared list is
   # cleared here from the moment it exists, with no edit to this file.
@@ -279,9 +279,9 @@ module FormatterRunHelpers
   # it fixes the *set* of matching constants, so an unrelated future constant
   # ending in `_KEYS` fails there, by name, before it can quietly widen what
   # this clears.
-  HERMETIC_ENV = SpecGuard::RSpec::Configuration
+  HERMETIC_ENV = SpecGuard::Client::Configuration
                  .constants.grep(/_KEYS\z/)
-                 .flat_map { |list| SpecGuard::RSpec::Configuration.const_get(list) }
+                 .flat_map { |list| SpecGuard::Client::Configuration.const_get(list) }
                  .to_h { |key| [key, nil] }
                  .freeze
 
@@ -559,7 +559,7 @@ module IngestContract
       # TEST-ONLY helper validates with json_schemer directly — a development
       # dependency, same as the offline validator stub.
       require "json_schemer"
-      (@schemer ||= JSONSchemer.schema(JSON.parse(File.read(SpecGuard::RSpec::SCHEMA_PATH))))
+      (@schemer ||= JSONSchemer.schema(JSON.parse(File.read(SpecGuard::Client::SCHEMA_PATH))))
         .validate(intent).to_a.map { |error| "#{label}: intent is invalid — #{error['error']}" }    when "unannotated"
       intent.nil? ? [] : ["#{label}: intent must be null when status is \"unannotated\""]
     else

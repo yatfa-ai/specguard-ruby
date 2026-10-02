@@ -5,7 +5,7 @@ require "fileutils"
 require "open3"
 require_relative "../../support/validator_stub"
 
-RSpec.describe SpecGuard::RSpec::CLI do
+RSpec.describe SpecGuard::Client::CLI do
   subject(:cli) { described_class.new(stdout: stdout, stderr: stderr) }
 
   let(:stdout) { StringIO.new }
@@ -16,7 +16,7 @@ RSpec.describe SpecGuard::RSpec::CLI do
   # resolution is stubbed to the offline replay stub — see
   # spec/support/validator_stub.rb.
   before do
-    allow(SpecGuard::RSpec::ValidatorBackend::Installer)
+    allow(SpecGuard::Client::ValidatorBackend::Installer)
       .to receive(:obtain).and_return(ValidatorStub.install_stubbable)
   end
 
@@ -815,8 +815,8 @@ RSpec.describe SpecGuard::RSpec::CLI do
     # The document must not be able to name a schema the gem does not carry.
     # @intent: { entity: "CLI json renderer", action: "declare the protocol", behavior: "the document declares the schema revision the gem actually vendors", layer: "unit" }
     it "declares the schema it actually vendors" do
-      expect(SpecGuard::RSpec::JSONReporter::SCHEMA_ID)
-        .to eq(File.basename(SpecGuard::RSpec::SCHEMA_PATH))
+      expect(SpecGuard::Client::JSONReporter::SCHEMA_ID)
+        .to eq(File.basename(SpecGuard::Client::SCHEMA_PATH))
     end
 
     describe "every Linter::Result field survives the renderer" do
@@ -1147,11 +1147,11 @@ RSpec.describe SpecGuard::RSpec::CLI do
       # resolved" — the always-on form `--require-validator` used to gate.
       # @intent: { entity: "CLI json renderer", action: "fail without a document", behavior: "an unresolvable validator is reported as prose on stderr, not as a json document", layer: "unit" }
       it "reports an unresolvable validator as prose on stderr, not as a document" do
-        allow(SpecGuard::RSpec::ValidatorBackend::Installer)
-          .to receive(:obtain).and_raise(SpecGuard::RSpec::ValidatorError, "could not obtain validate-intent")
+        allow(SpecGuard::Client::ValidatorBackend::Installer)
+          .to receive(:obtain).and_raise(SpecGuard::Client::ValidatorError, "could not obtain validate-intent")
         code = cli.run(["--json", fixture_path("order_spec.rb")])
 
-        expect(code).to eq(SpecGuard::RSpec::CLI::EXIT_MISUSE)
+        expect(code).to eq(SpecGuard::Client::CLI::EXIT_MISUSE)
         expect(out).to be_empty
         expect(err).to include("specguard-lint: error: could not obtain validate-intent")
       end
@@ -1211,9 +1211,9 @@ RSpec.describe SpecGuard::RSpec::CLI do
     # @intent: { entity: "CLI", action: "read files", behavior: "an unreadable file is classified as a read failure, not as a malformed annotation", layer: "unit" }
     it "classifies it as a read failure, not as a malformed annotation" do
       Dir.mktmpdir do |dir|
-        finding = SpecGuard::RSpec::Scanner.scan_file(File.join(dir, "gone_spec.rb")).first
+        finding = SpecGuard::Client::Scanner.scan_file(File.join(dir, "gone_spec.rb")).first
 
-        expect(finding.kind).to eq(SpecGuard::RSpec::Finding::KIND_READ)
+        expect(finding.kind).to eq(SpecGuard::Client::Finding::KIND_READ)
       end
     end
 

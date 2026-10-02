@@ -3,7 +3,7 @@
 require "tmpdir"
 require "open3"
 
-RSpec.describe SpecGuard::RSpec::FileSelector do
+RSpec.describe SpecGuard::Client::FileSelector do
   # Real git repositories, not a stubbed `git`. The whole point of this class is
   # what git actually does on a clean checkout, which a stub would simply
   # re-assert rather than test.
@@ -381,7 +381,7 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
     # @intent: { entity: "FileSelector", action: "fail loudly outside a repo", behavior: "running changed mode outside a git repository raises the typed usage error", layer: "unit" }
     it "raises a typed UsageError outside a git repository" do
       expect { described_class.select(changed: true, root: root) }
-        .to raise_error(SpecGuard::RSpec::UsageError, /requires a git repository/)
+        .to raise_error(SpecGuard::Client::UsageError, /requires a git repository/)
     end
 
     # @intent: { entity: "FileSelector", action: "fail loudly outside a repo", behavior: "the outside-a-repository failure raises rather than silently returning an empty set", layer: "unit" }
@@ -389,7 +389,7 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
       write(root, "spec/order_spec.rb")
 
       expect { described_class.select(changed: true, root: root) }
-        .to raise_error(SpecGuard::RSpec::UsageError)
+        .to raise_error(SpecGuard::Client::UsageError)
     end
 
     # @intent: { entity: "FileSelector", action: "fail loudly outside a repo", behavior: "a base ref git cannot resolve raises the typed usage error", layer: "unit" }
@@ -399,7 +399,7 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
       commit(root, "base")
 
       expect { described_class.select(changed: true, base: "no-such-ref", root: root) }
-        .to raise_error(SpecGuard::RSpec::UsageError, /could not diff/)
+        .to raise_error(SpecGuard::Client::UsageError, /could not diff/)
     end
 
     # @intent: { entity: "FileSelector", action: "fail loudly outside a repo", behavior: "a repository with no commits yet raises the typed usage error instead of selecting", layer: "unit" }
@@ -408,7 +408,7 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
       write(root, "spec/order_spec.rb")
 
       expect { described_class.select(changed: true, root: root) }
-        .to raise_error(SpecGuard::RSpec::UsageError, /could not determine a diff base/)
+        .to raise_error(SpecGuard::Client::UsageError, /could not determine a diff base/)
     end
 
     # Every --changed example above passes root: = the repository top level,
@@ -927,7 +927,7 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
         messages = []
         expect {
           described_class.select(changed: true, base: absent_sha, root: dst)
-        }.to raise_error(SpecGuard::RSpec::UsageError) { |e| messages << e.message }
+        }.to raise_error(SpecGuard::Client::UsageError) { |e| messages << e.message }
 
         expect(messages).to eq(
           ["--changed could not diff against \"#{absent_sha}\": this checkout is shallow and " \
@@ -983,7 +983,7 @@ RSpec.describe SpecGuard::RSpec::FileSelector do
         messages = []
         expect {
           described_class.select(changed: true, base: absent, root: root)
-        }.to raise_error(SpecGuard::RSpec::UsageError) { |e| messages << e.message }
+        }.to raise_error(SpecGuard::Client::UsageError) { |e| messages << e.message }
 
         expect(messages).to eq([%(--changed could not diff against "#{absent}")])
       end

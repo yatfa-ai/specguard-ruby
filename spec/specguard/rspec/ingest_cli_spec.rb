@@ -5,7 +5,7 @@ require "open3"
 require "stringio"
 require "tmpdir"
 
-require "specguard/rspec/ingest_cli"
+require "specguard/client/ingest_cli"
 
 require_relative "../../support/stub_ingest_endpoint"
 
@@ -33,7 +33,7 @@ require_relative "../../support/stub_ingest_endpoint"
 # its counts as an argument, and `#list_row` reads a struct instead of a payload.
 # So the byte lock is there for the same reason lint's is, and the behavioural
 # examples stay here, next to the behaviour they describe.
-RSpec.describe SpecGuard::RSpec::IngestCLI do
+RSpec.describe SpecGuard::Client::IngestCLI do
   subject(:cli) { described_class.new(stdout: stdout, stderr: stderr, env: env) }
 
   let(:stdout) { StringIO.new }
@@ -2551,7 +2551,7 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
       # renderer must not stand between a bug in this tool and that 2.
       # @intent: { entity: "specguard-ingest --json", action: "fail without a document", behavior: "an unexpected internal failure reports as a two printing no document", layer: "unit" }
       it "reports an unexpected internal failure as a 2, printing no document" do
-        allow(SpecGuard::RSpec::Transport).to receive(:new).and_raise(NotImplementedError, "boom")
+        allow(SpecGuard::Client::Transport).to receive(:new).and_raise(NotImplementedError, "boom")
 
         expect(cli.run(["--json", sink(run_payload)])).to eq(2)
         expect(out).to be_empty
@@ -2697,7 +2697,7 @@ RSpec.describe SpecGuard::RSpec::IngestCLI do
   describe "the backstop that keeps 1 meaning one thing" do
     # @intent: { entity: "specguard-ingest", action: "contain internal errors", behavior: "an unexpected internal failure reports as a two in those words", layer: "unit" }
     it "reports an unexpected internal failure as a 2, in those words" do
-      allow(SpecGuard::RSpec::Transport).to receive(:new).and_raise(NotImplementedError, "boom")
+      allow(SpecGuard::Client::Transport).to receive(:new).and_raise(NotImplementedError, "boom")
 
       code = described_class.new(stdout: stdout, stderr: stderr,
                                  env: { "SPECGUARD_ENDPOINT" => "https://specguard.example.com",

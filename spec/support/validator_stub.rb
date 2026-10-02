@@ -3,7 +3,7 @@
 # An offline stand-in for the auto-installed `validate-intent` binary.
 #
 # SPGD-867 made binary resolution default-on: with `SPECGUARD_VALIDATE_INTENT`
-# unset, {SpecGuard::RSpec::ValidatorBackend::Installer} would DOWNLOAD the
+# unset, {SpecGuard::Client::ValidatorBackend::Installer} would DOWNLOAD the
 # real release binary on first use. That is the production behaviour and it is
 # covered by the installer specs below — but a unit suite must not depend on
 # the network, so the CLI/formatter specs stub `Installer.obtain` to return a
@@ -113,10 +113,10 @@ module ValidatorStub
       args.each do |absolute, given|
         next if recorded.key?(absolute) || !File.file?(absolute)
 
-        require File.join(ENV.fetch("STUB_LIB"), "specguard/rspec")
+        require File.join(ENV.fetch("STUB_LIB"), "specguard/client")
         require "json_schemer"
         schemer ||= JSONSchemer.schema(JSON.parse(File.read(ENV.fetch("STUB_SCHEMA"))))
-        SpecGuard::RSpec::Scanner.scan_text(File.read(absolute, encoding: "UTF-8"), file: given).map do |finding|
+        SpecGuard::Client::Scanner.scan_text(File.read(absolute, encoding: "UTF-8"), file: given).map do |finding|
           if finding.extracted?
             errors = schemer.validate(finding.intent).map { |e| e["error"] || "schema violation" }
             findings << { "file" => given, "line" => finding.line, "ok" => errors.empty?,
@@ -139,7 +139,7 @@ module ValidatorStub
     File.chmod(0o755, script)
 
     lib_root = File.expand_path("../../lib", __dir__)
-    @stub_env = { "STUB_FINDINGS" => findings_file, "STUB_SCHEMA" => SpecGuard::RSpec::SCHEMA_PATH,
+    @stub_env = { "STUB_FINDINGS" => findings_file, "STUB_SCHEMA" => SpecGuard::Client::SCHEMA_PATH,
                   "STUB_LIB" => lib_root }
     ENV.replace(ENV.to_h.merge(@stub_env))
 
