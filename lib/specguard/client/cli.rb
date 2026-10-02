@@ -3,7 +3,7 @@
 require "optparse"
 
 module SpecGuard
-  module RSpec
+  module Client
     # `specguard-lint`'s command line, and the whole of the exit contract.
     #
     # == The contract, and the reason it needs defending
@@ -358,7 +358,7 @@ module SpecGuard
       end
 
       # The fence arm of the `:all` empty reason: every matching file the walk
-      # found was inside a {SpecGuard::RSpec::FileSelector::SKIPPED_DIRECTORIES}
+      # found was inside a {SpecGuard::Client::FileSelector::SKIPPED_DIRECTORIES}
       # directory, so the silence is the fence's, not the tree's.
       def all_fenced_reason(selection)
         n = selection.skipped

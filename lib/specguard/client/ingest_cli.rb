@@ -3,21 +3,21 @@
 require "json"
 require "optparse"
 
-require_relative "../rspec"
+require_relative "../client"
 require_relative "ingest_reporter"
 require_relative "transport"
 
 # `specguard-ingest`'s command line — the other end of `log/test_results.jsonl`.
 #
-# == Why this file is not on `require "specguard/rspec"`'s chain
+# == Why this file is not on `require "specguard/client"`'s chain
 #
 # `specguard-lint` runs on machines that never make a network call, and putting
 # this file on the umbrella's chain would put `net/http`, `uri` and `zlib` on
 # the linter's load path to serve a command it never invokes. So it is loaded by
 # its own path, exactly as the formatter is and for the same reason —
-# `require "specguard/rspec/ingest_cli"`, which `bin/specguard-ingest` does.
+# `require "specguard/client/ingest_cli"`, which `bin/specguard-ingest` does.
 module SpecGuard
-  module RSpec
+  module Client
     # Replays a saved run: reads a `log/test_results.jsonl` back and re-delivers
     # each line through the {Transport} this gem already ships.
     #

@@ -5,12 +5,12 @@ require "specguard/rspec/formatter"
 
 # Criterion 6: the formatter's settings, their ENV defaults, and the promise
 # that nothing here can be the reason a suite fails.
-RSpec.describe SpecGuard::RSpec::Configuration do
+RSpec.describe SpecGuard::Client::Configuration do
   # Never the real checkout. `commit_sha` and `branch` both now fall back to
   # git, and a spec that let that through would be asserting against whatever
   # commit and branch the suite happens to be running on — green on a laptop,
   # and green for the wrong reason.
-  let(:no_git) { object_double(SpecGuard::RSpec::GitCheckout, commit_sha: nil, branch: nil) }
+  let(:no_git) { object_double(SpecGuard::Client::GitCheckout, commit_sha: nil, branch: nil) }
 
   describe "defaults, seeded from the environment" do
     # `env:` is injected rather than mutating the process's own ENV: these
@@ -386,7 +386,7 @@ RSpec.describe SpecGuard::RSpec::Configuration do
   # a blank `branch`, which it accepts and renders as "not reported" on every
   # single row.
   describe "the git fallback" do
-    let(:git) { object_double(SpecGuard::RSpec::GitCheckout, commit_sha: "cafebabe", branch: "release/2.0") }
+    let(:git) { object_double(SpecGuard::Client::GitCheckout, commit_sha: "cafebabe", branch: "release/2.0") }
 
     # @intent: { entity: "Configuration", action: "fall back to git", behavior: "when no variable named the commit the checkout is asked", layer: "unit" }
     it "asks the checkout when no variable named the commit" do
@@ -431,14 +431,14 @@ RSpec.describe SpecGuard::RSpec::Configuration do
 
     # @intent: { entity: "Configuration", action: "fall back to git", behavior: "a blank answer from git counts as no answer for the commit", layer: "unit" }
     it "treats a blank answer from git as no answer" do
-      blank = object_double(SpecGuard::RSpec::GitCheckout, commit_sha: "  \n", branch: "  \n")
+      blank = object_double(SpecGuard::Client::GitCheckout, commit_sha: "  \n", branch: "  \n")
 
       expect(described_class.new(env: {}, git: blank).commit_sha).to be_nil
     end
 
     # @intent: { entity: "Configuration", action: "fall back to git", behavior: "a blank answer from git counts as no branch", layer: "unit" }
     it "treats a blank branch from git as no branch" do
-      blank = object_double(SpecGuard::RSpec::GitCheckout, commit_sha: "  \n", branch: "  \n")
+      blank = object_double(SpecGuard::Client::GitCheckout, commit_sha: "  \n", branch: "  \n")
 
       expect(described_class.new(env: {}, git: blank).branch).to be_nil
     end
@@ -527,8 +527,8 @@ RSpec.describe SpecGuard::RSpec::Configuration do
     # @intent: { entity: "Configuration", action: "disclose the env surface", behavior: "the git fallback uses exactly the commands the readme discloses", layer: "unit" }
     it "falls back to exactly the git commands the README discloses" do
       expect(
-        "commit_sha" => SpecGuard::RSpec::GitCheckout::COMMIT_SHA_COMMAND,
-        "branch" => SpecGuard::RSpec::GitCheckout::BRANCH_COMMAND
+        "commit_sha" => SpecGuard::Client::GitCheckout::COMMIT_SHA_COMMAND,
+        "branch" => SpecGuard::Client::GitCheckout::BRANCH_COMMAND
       ).to eq(
         "commit_sha" => %w[git rev-parse HEAD],
         "branch" => %w[git symbolic-ref --short -q HEAD]
@@ -540,7 +540,7 @@ end
 # The fallback's own contract, exercised against the real `git` binary. Its
 # three properties are all failure-shaped, which is why they are pinned here
 # rather than left to the injected double every other example uses.
-RSpec.describe SpecGuard::RSpec::GitCheckout do
+RSpec.describe SpecGuard::Client::GitCheckout do
   before { described_class.reset! }
 
   after { described_class.reset! }
@@ -761,6 +761,35 @@ RSpec.describe SpecGuard::RSpec::GitCheckout do
     allow(IO).to receive(:popen).and_raise(NotImplementedError, "nope")
 
     expect(described_class.branch).to be_nil
+  end
+end
+
+RSpec.describe SpecGuard do
+  after { described_class.reset_configuration! }
+
+  # The framework-neutral entry point a Minitest consumer configures through.
+  # `SpecGuard::RSpec.configure` is the documented RSpec spelling and must hand
+  # back the SAME object, not a second configuration that the reporter ignores.
+  # @intent: { entity: "SpecGuard.configure", action: "share the configuration with SpecGuard::RSpec", behavior: "SpecGuard.configure and SpecGuard::RSpec.configure operate on one and the same configuration object, and a reset through either drops both", layer: "unit" }
+  it "shares one configuration object with SpecGuard::RSpec" do
+    described_class.configure { |config| config.branch = "feature/neutral" }
+
+    expect(SpecGuard::RSpec.configuration).to equal(described_class.configuration)
+    expect(SpecGuard::RSpec.configure).to equal(described_class.configure)
+    expect(SpecGuard::RSpec.configuration.branch).to eq("feature/neutral")
+
+    SpecGuard::RSpec.reset_configuration!
+    expect(described_class.configuration.branch).not_to eq("feature/neutral")
+  end
+
+  # @intent: { entity: "SpecGuard.configure", action: "hand over the configuration", behavior: "configure yields the Client::Configuration and returns it with or without a block", layer: "unit" }
+  it "yields and returns the Client::Configuration" do
+    yielded = nil
+    returned = described_class.configure { |config| yielded = config }
+
+    expect(yielded).to be_a(SpecGuard::Client::Configuration)
+    expect(returned).to equal(yielded)
+    expect(described_class.configure).to equal(yielded)
   end
 end
 

@@ -44,6 +44,19 @@ be assumed, require it explicitly before the run:
 bundle exec ruby -rminitest/specguard_plugin -e 'Minitest.extensions << "specguard"; load ARGV[0]' test/your_suite.rb
 ```
 
+Configure it from Ruby, if the environment is not the right place, through the framework-neutral
+`SpecGuard.configure` — in a `test_helper.rb`, before the run starts:
+
+```ruby
+SpecGuard.configure do |config|
+  config.branch = "release/2.0"
+end
+```
+
+`SpecGuard::RSpec.configure` is the same call under its RSpec-era spelling: both return the one
+configuration object the reporter and the formatter read, so either works from either framework.
+See [Shipping the run to SpecGuard](#shipping-the-run-to-specguard) for the settings.
+
 ## The linter — `specguard-lint`
 
 Validates `# @intent:` annotations in changed (or all) `*_spec.rb` files against the OpenTestIntent
@@ -441,8 +454,9 @@ the one on the next line.
 # SPECGUARD_SHARD_ID / SPECGUARD_OUTPUT_PATH / SPECGUARD_LOCAL_OUTPUT_PATH
 # override any of it.
 #
-# Assign a value here only when it is one neither source can know:
-SpecGuard::RSpec.configure do |config|
+# Assign a value here only when it is one neither source can know
+# (`SpecGuard::RSpec.configure` is the same call, under its RSpec-era name):
+SpecGuard.configure do |config|
   config.branch = "release/2.0"
 end
 ```
@@ -462,7 +476,7 @@ export SPECGUARD_TIMEOUT=10         # optional; seconds, applied to connect and 
 
 ```ruby
 # ...or in Ruby, if you would rather not use the environment
-SpecGuard::RSpec.configure do |config|
+SpecGuard.configure do |config|
   config.endpoint = "https://specguard.example.com"
   config.api_key  = ENV["SPECGUARD_API_KEY"]
   config.timeout  = 10
@@ -474,7 +488,7 @@ is written to `log/test_results.local.jsonl` — the local development record,
 kept apart from the replay queue — so local development needs no opt-out, and a
 fork with no secret configured behaves like a laptop rather than like a broken
 build. The local file's name is configurable via `SPECGUARD_LOCAL_OUTPUT_PATH`
-(or `SpecGuard::RSpec.configure { |c| c.local_output_path = ... }`). The write
+(or `SpecGuard.configure { |c| c.local_output_path = ... }`). The write
 itself is silent when it succeeds — the ordinary case on any machine that can
 create `log/` — and it usually does.
 

@@ -4,7 +4,7 @@
 # with what?*
 #
 # It is the formatter's half of the annotation story. The linter's half already
-# exists and is not duplicated here — {SpecGuard::RSpec::Scanner} finds every
+# exists and is not duplicated here — {SpecGuard::Client::Scanner} finds every
 # `@intent:` in a file, captures its payload string-aware and parses it, and
 # the `validate-intent` binary decides whether the result is valid. This class
 # consumes both. Writing a second extractor would guarantee that the tool
@@ -12,14 +12,14 @@
 # platform eventually disagree about what an annotation *is*.
 #
 # Requiring the linter's chain from here is safe in the direction that matters:
-# `lib/specguard/rspec.rb` does not require `rspec/core`, so pulling it in from
+# `lib/specguard/client.rb` does not require `rspec/core`, so pulling it in from
 # the formatter's side keeps `bin/specguard-lint` loadable on a machine with no
 # RSpec installed. spec/specguard/rspec/formatter_loading_spec.rb pins that in
 # both directions.
-require_relative "../rspec"
+require_relative "../client"
 
 module SpecGuard
-  module RSpec
+  module Client
     # == The lookback rule (SPGD-12 §2)
     #
     # `example.metadata[:line_number]` is the line the `it` is on. An annotation

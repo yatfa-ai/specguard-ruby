@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "tmpdir"
-require "specguard/rspec/annotation_lookup"
+require "specguard/client/annotation_lookup"
 require_relative "../../support/validator_stub"
 
 # The lookback rule (SPGD-12 §2), the downgrade policy, and the cost bound.
@@ -12,7 +12,7 @@ require_relative "../../support/validator_stub"
 # not lose one annotation — it loses the whole run's telemetry, for every
 # example in the suite. Downgrading to nil is what keeps that trade the right
 # way round.
-RSpec.describe SpecGuard::RSpec::AnnotationLookup do
+RSpec.describe SpecGuard::Client::AnnotationLookup do
   subject(:lookup) { described_class.new }
 
   # SPGD-867: validation is the binary's job and binary resolution is
@@ -22,7 +22,7 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
   # json_schemer as a development-only dependency). See
   # spec/support/validator_stub.rb.
   before do
-    allow(SpecGuard::RSpec::ValidatorBackend::Installer)
+    allow(SpecGuard::Client::ValidatorBackend::Installer)
       .to receive(:obtain).and_return(ValidatorStub.install_stubbable)
   end
 
@@ -313,10 +313,10 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     end
   end
 
-  # Two guards that today's {SpecGuard::RSpec::Scanner} cannot exercise, pinned
+  # Two guards that today's {SpecGuard::Client::Scanner} cannot exercise, pinned
   # with a stub because there is no other way to observe them.
   #
-  # {SpecGuard::RSpec::Finding} documents that exactly one of `intent` and
+  # {SpecGuard::Client::Finding} documents that exactly one of `intent` and
   # `problem` is non-nil, and the only Finding ever produced at line 0 is a
   # KIND_READ, which by construction carries a `problem`. Both guards are
   # therefore redundant *given that invariant* — and both exist for the case
@@ -328,11 +328,11 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
   # nobody pinned is one refactor away from being reachable and wrong.
   describe "guards against a Finding shape discovery does not currently produce" do
     def stub_scanner(finding)
-      allow(SpecGuard::RSpec::Scanner).to receive(:scan_text).and_return([finding])
+      allow(SpecGuard::Client::Scanner).to receive(:scan_text).and_return([finding])
     end
 
     def finding(**attributes)
-      SpecGuard::RSpec::Finding.new(file: "sample_spec.rb", **attributes)
+      SpecGuard::Client::Finding.new(file: "sample_spec.rb", **attributes)
     end
 
     # @intent: { entity: "AnnotationLookup", action: "guard odd finding shapes", behavior: "a line-zero finding is never treated as the annotation for the example on line one", layer: "unit" }
@@ -345,7 +345,7 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # @intent: { entity: "AnnotationLookup", action: "guard odd finding shapes", behavior: "a finding that carries both an intent and a problem ships nothing, the problem disqualifying the payload", layer: "unit" }
     it "never ships an intent from a finding that also reports a problem" do
       stub_scanner(finding(line: 2, intent: valid_intent,
-                           problem: "could not parse annotation", kind: SpecGuard::RSpec::Finding::KIND_PARSE))
+                           problem: "could not parse annotation", kind: SpecGuard::Client::Finding::KIND_PARSE))
 
       expect(lookup.intent_for(file: write_spec("# ...\nit 'x' do\n"), line: 2)).to be_nil
     end
@@ -363,14 +363,14 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # examples require a binary. `validator_backend_spec.rb` drives a real
     # stub binary end to end.
     def with_backend(results)
-      runner = instance_double(SpecGuard::RSpec::ValidatorBackend::Runner)
+      runner = instance_double(SpecGuard::Client::ValidatorBackend::Runner)
       allow(runner).to receive(:check).and_return(results)
-      allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_return(runner)
+      allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve).and_return(runner)
       runner
     end
 
     def result(line:, intent: nil, kind: nil, problem: nil, reasons: [])
-      SpecGuard::RSpec::Linter::Result.new(file: "sample_spec.rb", line: line, intent: intent,
+      SpecGuard::Client::Linter::Result.new(file: "sample_spec.rb", line: line, intent: intent,
                                            kind: kind, problem: problem, reasons: reasons)
     end
 
@@ -393,7 +393,7 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # would return the Scanner's intent and fail here.
     # @intent: { entity: "AnnotationLookup", action: "defer to the validator backend", behavior: "a backend rejection wins even when the local chain would have parsed the annotation as valid", layer: "unit" }
     it "does not re-derive the verdict locally" do
-      with_backend([result(line: 1, kind: SpecGuard::RSpec::Finding::KIND_SCHEMA,
+      with_backend([result(line: 1, kind: SpecGuard::Client::Finding::KIND_SCHEMA,
                            reasons: ["<root>: layer is not one of ..."], intent: valid_intent)])
       path = write_spec("# @intent: #{valid_annotation}\nit 'x' do\n")
 
@@ -429,7 +429,7 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     it "still lets a line's own rejected annotation beat the comment above it" do
       with_backend([
         result(line: 1, intent: valid_intent),
-        result(line: 2, kind: SpecGuard::RSpec::Finding::KIND_PARSE,
+        result(line: 2, kind: SpecGuard::Client::Finding::KIND_PARSE,
                problem: "could not parse annotation")
       ])
       path = write_spec("# @intent: #{valid_annotation}\nit 'x' do # @intent: {\n")
@@ -441,7 +441,7 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # anyone can claim — the same sentinel the Ruby path filters out.
     # @intent: { entity: "AnnotationLookup", action: "defer to the validator backend", behavior: "a line-zero backend finding never becomes the annotation for line one", layer: "unit" }
     it "never lets a line-0 finding become line 1's annotation" do
-      with_backend([result(line: 0, kind: SpecGuard::RSpec::Finding::KIND_READ,
+      with_backend([result(line: 0, kind: SpecGuard::Client::Finding::KIND_READ,
                            problem: "could not read file: no file at this path")])
 
       expect(lookup.intent_for(file: write_spec("it 'x' do\n"), line: 1)).to be_nil
@@ -479,8 +479,8 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # formatter; the LINTER is the loud half, and it exits 2 outright.
     # @intent: { entity: "AnnotationLookup", action: "survive an unusable backend", behavior: "a backend that cannot be resolved answers unannotated for every example rather than raising", layer: "unit" }
     it "answers unannotated when the configured binary is unusable" do
-      allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve)
-        .and_raise(SpecGuard::RSpec::ValidatorError, "nope")
+      allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve)
+        .and_raise(SpecGuard::Client::ValidatorError, "nope")
       path = write_spec("# @intent: #{valid_annotation}\nit 'a' do\n# @intent: #{valid_annotation}\nit 'b' do\n")
 
       expect(lookup.intent_for(file: path, line: 2)).to be_nil
@@ -493,13 +493,13 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # day. Memoized on failure, which is what makes that true.
     # @intent: { entity: "AnnotationLookup", action: "survive an unusable backend", behavior: "the unusable backend is probed exactly once, the failure being memoized", layer: "unit" }
     it "probes the unusable binary only once" do
-      allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve)
-        .and_raise(SpecGuard::RSpec::ValidatorError, "nope")
+      allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve)
+        .and_raise(SpecGuard::Client::ValidatorError, "nope")
       path = write_spec("# @intent: #{valid_annotation}\nit 'a' do\n# @intent: #{valid_annotation}\nit 'b' do\n")
 
       [2, 4].each { |line| lookup.intent_for(file: path, line: line) }
 
-      expect(SpecGuard::RSpec::ValidatorBackend).to have_received(:resolve).once
+      expect(SpecGuard::Client::ValidatorBackend).to have_received(:resolve).once
     end
 
     # The same rule one layer in: a backend that resolved and then died
@@ -507,9 +507,9 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # answers unannotated rather than costing the run its telemetry.
     # @intent: { entity: "AnnotationLookup", action: "survive an unusable backend", behavior: "a backend that dies mid-run answers unannotated instead of costing the run its telemetry", layer: "unit" }
     it "answers unannotated when the backend dies mid-run" do
-      runner = instance_double(SpecGuard::RSpec::ValidatorBackend::Runner)
-      allow(runner).to receive(:check).and_raise(SpecGuard::RSpec::ValidatorError, "died")
-      allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve).and_return(runner)
+      runner = instance_double(SpecGuard::Client::ValidatorBackend::Runner)
+      allow(runner).to receive(:check).and_raise(SpecGuard::Client::ValidatorError, "died")
+      allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve).and_return(runner)
       path = write_spec("# @intent: #{valid_annotation}\nit 'x' do\n")
 
       expect(lookup.intent_for(file: path, line: 2)).to be_nil
@@ -645,14 +645,14 @@ RSpec.describe SpecGuard::RSpec::AnnotationLookup do
     # "warns once" meaning "scans once".
     # @intent: { entity: "AnnotationLookup", action: "fail quiet and once", behavior: "a file whose scan blew up is not rescanned by later lookups, keeping warn-once meaning scan-once", layer: "unit" }
     it "does not rescan a file whose scan blew up" do
-      allow(SpecGuard::RSpec::ValidatorBackend).to receive(:resolve)
-        .and_raise(SpecGuard::RSpec::ValidatorError, "nope")
-      allow(SpecGuard::RSpec::Scanner).to receive(:scan_text).and_raise(NotImplementedError, "nope")
+      allow(SpecGuard::Client::ValidatorBackend).to receive(:resolve)
+        .and_raise(SpecGuard::Client::ValidatorError, "nope")
+      allow(SpecGuard::Client::Scanner).to receive(:scan_text).and_raise(NotImplementedError, "nope")
       path = write_spec("it 'a' do\nit 'b' do\n")
 
       expect { lookup.intent_for(file: path, line: 1) }.to raise_error(NotImplementedError)
       expect(lookup.intent_for(file: path, line: 2)).to be_nil
-      expect(SpecGuard::RSpec::Scanner).to have_received(:scan_text).once
+      expect(SpecGuard::Client::Scanner).to have_received(:scan_text).once
     end
   end
 end

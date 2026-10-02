@@ -5,24 +5,24 @@ require "open3"
 require "digest"
 require "rubygems/package"
 
-# The vendored schema is now load-bearing: {SpecGuard::RSpec::Schema.load}
+# The vendored schema is now load-bearing: {SpecGuard::Client::Schema.load}
 # reads it on every run, and a run that cannot read it exits 2. That makes the
 # *packaging* trap real rather than theoretical — the gemspec builds
 # `spec.files` from `git ls-files`, so a vendored file that was never
 # `git add`ed is silently absent from the built gem, and the failure surfaces
 # only in an installed gem on someone else's machine, far from its cause.
 RSpec.describe "the vendored OpenTestIntent schema" do
-  subject(:schema) { JSON.parse(File.read(SpecGuard::RSpec::SCHEMA_PATH)) }
+  subject(:schema) { JSON.parse(File.read(SpecGuard::Client::SCHEMA_PATH)) }
 
-  # @intent: { entity: "vendored OpenTestIntent schema", action: "ship inside the gem", behavior: "the schema path resolves under lib/specguard/rspec/schemas and the file exists on disk", layer: "unit" }
+  # @intent: { entity: "vendored OpenTestIntent schema", action: "ship inside the gem", behavior: "the schema path resolves under lib/specguard/client/schemas and the file exists on disk", layer: "unit" }
   it "ships inside lib/, which the gemspec packages" do
-    expect(SpecGuard::RSpec::SCHEMA_PATH).to include("/lib/specguard/rspec/schemas/")
-    expect(File).to exist(SpecGuard::RSpec::SCHEMA_PATH)
+    expect(SpecGuard::Client::SCHEMA_PATH).to include("/lib/specguard/client/schemas/")
+    expect(File).to exist(SpecGuard::Client::SCHEMA_PATH)
   end
 
   # @intent: { entity: "vendored OpenTestIntent schema", action: "stay tracked by git", behavior: "git ls-files names the schema, without which the gemspec would silently package a gem missing it", layer: "unit" }
   it "is tracked by git, without which it would not be packaged" do
-    tracked = `git ls-files --error-unmatch #{SpecGuard::RSpec::SCHEMA_PATH} 2>/dev/null`
+    tracked = `git ls-files --error-unmatch #{SpecGuard::Client::SCHEMA_PATH} 2>/dev/null`
 
     expect(tracked.strip).not_to be_empty
   end
@@ -52,7 +52,7 @@ RSpec.describe "the vendored OpenTestIntent schema" do
 
   # @intent: { entity: "vendored OpenTestIntent schema", action: "match the canonical bytes", behavior: "the sha256 digest, id and schema dialect equal the pins from the protocol repository schema-v1.0 tag", layer: "unit" }
   it "is the canonical v1 schema, byte-for-byte" do
-    expect(Digest::SHA256.file(SpecGuard::RSpec::SCHEMA_PATH).hexdigest).to eq(CANONICAL_V1_SHA256)
+    expect(Digest::SHA256.file(SpecGuard::Client::SCHEMA_PATH).hexdigest).to eq(CANONICAL_V1_SHA256)
     expect(schema["$id"]).to eq(CANONICAL_V1_ID)
     expect(schema["$schema"]).to eq("http://json-schema.org/draft-07/schema#")
   end
@@ -69,7 +69,7 @@ RSpec.describe "the vendored OpenTestIntent schema" do
   # depend on them. This is the assertion that keeps that true.
   # @intent: { entity: "vendored OpenTestIntent schema", action: "avoid the unshipped fixtures", behavior: "the schema path stays outside spec/, keeping runtime independent of files the gem does not package", layer: "unit" }
   it "is reachable without the spec fixtures, which do not ship" do
-    expect(SpecGuard::RSpec::SCHEMA_PATH).not_to include("/spec/")
+    expect(SpecGuard::Client::SCHEMA_PATH).not_to include("/spec/")
   end
 
   # Criterion 9 + trap (b). Only an actual `gem build` proves `spec.files`
@@ -100,7 +100,7 @@ RSpec.describe "the vendored OpenTestIntent schema" do
 
     # @intent: { entity: "built gem", action: "package the vendored schema", behavior: "the built gem file list includes the schema under lib, which the linter cannot run without", layer: "integration" }
     it "packages the vendored schema, which the linter cannot run without" do
-      expect(@spec.files).to include("lib/specguard/rspec/schemas/open-test-intent.v1.json")
+      expect(@spec.files).to include("lib/specguard/client/schemas/open-test-intent.v1.json")
     end
 
     # The schema is not the only file the trap can eat. `git ls-files` misses
@@ -157,11 +157,11 @@ RSpec.describe "the vendored OpenTestIntent schema" do
     it "matches the checkout's copy byte for byte, from outside the checkout" do
       Dir.mktmpdir do |dir|
         packaged = File.join(dir, "open-test-intent.v1.json")
-        FileUtils.cp(SpecGuard::RSpec::SCHEMA_PATH, packaged)
+        FileUtils.cp(SpecGuard::Client::SCHEMA_PATH, packaged)
 
         expect(JSON.parse(File.read(packaged))).to eq(schema)
         expect(Digest::SHA256.file(packaged).hexdigest)
-          .to eq(Digest::SHA256.file(SpecGuard::RSpec::SCHEMA_PATH).hexdigest)
+          .to eq(Digest::SHA256.file(SpecGuard::Client::SCHEMA_PATH).hexdigest)
       end
     end
   end

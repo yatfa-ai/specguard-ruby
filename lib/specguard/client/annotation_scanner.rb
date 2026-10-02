@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module SpecGuard
-  module RSpec
+  module Client
     # Finds `@intent:` annotations in test source and captures the object
     # literal that follows each one.
     #

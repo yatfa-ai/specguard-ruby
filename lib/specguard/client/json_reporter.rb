@@ -3,7 +3,7 @@
 require "json"
 
 module SpecGuard
-  module RSpec
+  module Client
     # `specguard-lint --json`: the machine-readable renderer over the same
     # `Array<Linter::Result>` the text report is built from.
     #

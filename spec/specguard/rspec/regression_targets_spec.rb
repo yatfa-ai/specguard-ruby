@@ -5,7 +5,7 @@ require "digest"
 require "stringio"
 require "tmpdir"
 
-require "specguard/rspec/ingest_cli"
+require "specguard/client/ingest_cli"
 
 require_relative "../../support/stub_ingest_endpoint"
 require_relative "../../support/validator_stub"
@@ -23,7 +23,7 @@ require_relative "../../support/validator_stub"
 # ratified elsewhere and must not move by accident.
 RSpec.describe "permissive-syntax regression targets" do
   def intent_from(line)
-    findings = SpecGuard::RSpec::Scanner.scan_text(line, file: "example_spec.rb")
+    findings = SpecGuard::Client::Scanner.scan_text(line, file: "example_spec.rb")
     expect(findings.length).to eq(1)
     expect(findings.first.problem).to be_nil
     findings.first.intent
@@ -81,20 +81,20 @@ RSpec.describe "permissive-syntax regression targets" do
   describe "the bare-word rule" do
     # @intent: { entity: "PayloadNormalizer", action: "apply the bare-word rule", behavior: "a bare word in key position gains quotes during normalization", layer: "unit" }
     it "quotes a bare word in key position" do
-      expect(SpecGuard::RSpec::PayloadNormalizer.normalize('{entity: "Order"}')).to eq('{"entity": "Order"}')
+      expect(SpecGuard::Client::PayloadNormalizer.normalize('{entity: "Order"}')).to eq('{"entity": "Order"}')
     end
 
     # @intent: { entity: "PayloadNormalizer", action: "apply the bare-word rule", behavior: "a bare word in value position stays unquoted, since the protocol relaxes keys and quote style but never value quoting", layer: "unit" }
     it "leaves a bare word in value position unquoted" do
-      expect(SpecGuard::RSpec::PayloadNormalizer.normalize("{layer: request}")).to eq('{"layer": request}')
+      expect(SpecGuard::Client::PayloadNormalizer.normalize("{layer: request}")).to eq('{"layer": request}')
     end
 
     # @intent: { entity: "PayloadNormalizer", action: "apply the bare-word rule", behavior: "an unquoted value therefore surfaces as a parse finding rather than being silently accepted as valid", layer: "unit" }
     it "so an unquoted value is reported as a parse problem, not accepted" do
-      findings = SpecGuard::RSpec::Scanner.scan_text("# @intent: {layer: request}", file: "example_spec.rb")
+      findings = SpecGuard::Client::Scanner.scan_text("# @intent: {layer: request}", file: "example_spec.rb")
 
       expect(findings.first.intent).to be_nil
-      expect(findings.first.kind).to eq(SpecGuard::RSpec::Finding::KIND_PARSE)
+      expect(findings.first.kind).to eq(SpecGuard::Client::Finding::KIND_PARSE)
       expect(findings.first.problem).to start_with("could not parse annotation:")
     end
   end
@@ -105,7 +105,7 @@ RSpec.describe "permissive-syntax regression targets" do
   it "never evaluates the payload" do
     line = %q{# @intent: { entity: "#{raise 'code executed'}", action: 'x', behavior: 'y', layer: 'unit' }}
 
-    expect { SpecGuard::RSpec::Scanner.scan_text(line, file: "evil_spec.rb") }.not_to raise_error
+    expect { SpecGuard::Client::Scanner.scan_text(line, file: "evil_spec.rb") }.not_to raise_error
     expect(intent_from(line)["entity"]).to eq('#{raise \'code executed\'}')
   end
 end
@@ -148,20 +148,20 @@ RSpec.describe "the default output path, byte for byte" do
   # composes it from the real thing.
   before do
     @stub = ValidatorStub.install_stubbable
-    allow(SpecGuard::RSpec::ValidatorBackend::Installer).to receive(:obtain).and_return(@stub)
+    allow(SpecGuard::Client::ValidatorBackend::Installer).to receive(:obtain).and_return(@stub)
   end
 
   def run(*paths)
     stdout = StringIO.new
     stderr = StringIO.new
-    code = SpecGuard::RSpec::CLI.new(stdout: stdout, stderr: stderr, env: {}).run(paths)
+    code = SpecGuard::Client::CLI.new(stdout: stdout, stderr: stderr, env: {}).run(paths)
     [stdout.string, stderr.string, code]
   end
 
   # The one line every run writes to stderr since SPGD-247. It is part of the
   # default path and so it is pinned here too, not normalised away.
   def provenance
-    digest = Digest::SHA256.file(SpecGuard::RSpec::SCHEMA_PATH).hexdigest
+    digest = Digest::SHA256.file(SpecGuard::Client::SCHEMA_PATH).hexdigest
     "specguard-lint: validated by validate-intent 0.1.4 (go1.22.12 #{RUBY_PLATFORM}) " \
       "schema sha256:#{digest} at #{@stub} (SPECGUARD_VALIDATE_INTENT) " \
       "— it reports enforcing the schema this gem vendors, loaded from <embedded schema>\n"
@@ -326,7 +326,7 @@ RSpec.describe "the specguard-ingest default output path, byte for byte" do
   end
 
   def build_cli(stdout, stderr, env)
-    SpecGuard::RSpec::IngestCLI.new(stdout: stdout, stderr: stderr, env: env)
+    SpecGuard::Client::IngestCLI.new(stdout: stdout, stderr: stderr, env: env)
   end
 
   # @intent: { entity: "specguard-ingest default output", action: "pin the mixed delivery report", behavior: "a delivery hitting every status at once prints exactly the ratified per-run verdict bytes", layer: "unit" }

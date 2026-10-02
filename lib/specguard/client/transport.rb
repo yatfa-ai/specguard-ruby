@@ -9,7 +9,7 @@ require_relative "configuration"
 require_relative "../version"
 
 module SpecGuard
-  module RSpec
+  module Client
     # The one HTTP call this gem makes: `POST <endpoint>/api/v1/ingest`,
     # carrying a whole run.
     #

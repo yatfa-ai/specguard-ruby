@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module SpecGuard
-  module RSpec
+  module Client
     # Where the checkout is sitting — which commit, and which branch — asked of
     # git directly.
     #
@@ -120,7 +120,7 @@ module SpecGuard
     # The escape hatch stays open on top of all of it, for a value neither
     # source can know:
     #
-    #   SpecGuard::RSpec.configure do |config|
+    #   SpecGuard.configure do |config|
     #     config.branch = "release/2.0"
     #   end
     #
@@ -431,41 +431,6 @@ module SpecGuard
         return nil unless parsed&.finite? && parsed.positive?
 
         parsed
-      end
-    end
-
-    class << self
-      # The process-wide formatter configuration.
-      #
-      # Built on first use rather than at load time so that a `configure` block
-      # in a `spec_helper.rb` and a variable exported by a CI job describe the
-      # same object regardless of which the interpreter reached first.
-      #
-      # @return [Configuration]
-      def configuration
-        @configuration ||= Configuration.new
-      end
-
-      # Configure the formatter.
-      #
-      #   SpecGuard::RSpec.configure do |config|
-      #     config.branch = "release/2.0"
-      #   end
-      #
-      # @yieldparam configuration [Configuration]
-      # @return [Configuration] the configuration, block or no block
-      def configure
-        yield configuration if block_given?
-        configuration
-      end
-
-      # Drop the memoized configuration so the next read re-seeds from ENV.
-      # Exists for tests, and for the rare caller that changes the environment
-      # after this file was loaded.
-      #
-      # @return [void]
-      def reset_configuration!
-        @configuration = nil
       end
     end
   end

@@ -3,7 +3,7 @@
 require "json"
 
 module SpecGuard
-  module RSpec
+  module Client
     # The shared verdict shape both renderers and the exit code derive from.
     #
     # == Where this sits after SPGD-867 (the cutover)

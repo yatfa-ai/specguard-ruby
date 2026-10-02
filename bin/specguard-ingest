@@ -9,13 +9,13 @@
 # the suite already finished, instead of re-running the suite.
 #
 # Exit codes are the contract, and they are `specguard-lint`'s reasoning
-# transferred (see SpecGuard::RSpec::IngestCLI):
+# transferred (see SpecGuard::Client::IngestCLI):
 #
 #   0  every line was accepted
 #   1  at least one line was refused by the endpoint
 #   2  this tool could not do its job — misuse, or the tool itself broken
 #
-# SpecGuard::RSpec::IngestCLI#run is written to *return* one of those three and
+# SpecGuard::Client::IngestCLI#run is written to *return* one of those three and
 # never to raise. The `require`s below are the one thing outside its reach, so
 # they get the same treatment here: a gem that cannot even load is the tool
 # being broken, which is a 2. Left bare, Ruby would exit 1 and report that the
@@ -23,18 +23,18 @@
 
 # Allow running from a source checkout without bundler by putting the local
 # lib/ on the load path. When the gem is installed (or run under
-# `bundle exec`), specguard/rspec resolves through the normal load path.
+# `bundle exec`), specguard/client resolves through the normal load path.
 source_lib = File.expand_path("../lib", __dir__)
 $LOAD_PATH.unshift(source_lib) unless $LOAD_PATH.include?(source_lib)
 
 begin
-  require "specguard/rspec"
+  require "specguard/client"
   # By its own path, deliberately. `net/http`, `uri` and `zlib` are not on the
   # linter's load chain and this command is the reason to pay for them.
-  require "specguard/rspec/ingest_cli"
+  require "specguard/client/ingest_cli"
 rescue ScriptError, StandardError => e
   warn "specguard-ingest: error: could not load specguard-ruby: #{e.class}: #{e.message}"
   exit 2
 end
 
-exit SpecGuard::RSpec::IngestCLI.new.run(ARGV)
+exit SpecGuard::Client::IngestCLI.new.run(ARGV)

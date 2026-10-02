@@ -40,13 +40,19 @@ require "rspec/core/formatters/base_formatter"
 require "json"
 require "fileutils"
 
-require_relative "configuration"
-require_relative "transport"
+# `specguard/rspec` is what defines `SpecGuard::RSpec` — the namespace whose
+# existence is the shadowing hazard documented below, and the home of the
+# documented `SpecGuard::RSpec.configure` entry point. It is required here so
+# that both stay true however this file is reached, now that the client chain
+# no longer pulls it in.
+require_relative "../rspec"
+require_relative "../client/configuration"
+require_relative "../client/transport"
 # Brings the linter's discovery chain with it (Scanner, Finding, Schema). That
 # direction is safe — `specguard/rspec` does not require `rspec/core`, so the
 # linter stays loadable without RSpec; it is only the reverse that would break
 # packaging.
-require_relative "annotation_lookup"
+require_relative "../client/annotation_lookup"
 
 module SpecGuard
   # == A NOTE ON CONSTANT RESOLUTION — read this before editing
@@ -338,7 +344,7 @@ module SpecGuard
       root = self.class.repo_root
       ::RSpec::Core::Metadata.relative_path_regex
       @error_stream = error_stream
-      @annotations = annotations || SpecGuard::RSpec::AnnotationLookup.new(root: root)
+      @annotations = annotations || SpecGuard::Client::AnnotationLookup.new(root: root)
       @specs = []
       @warned = false
       # Stamped here rather than from a `start` hook on purpose. `:start` is not
@@ -1031,7 +1037,7 @@ module SpecGuard
     end
 
     def transport_for(configuration)
-      SpecGuard::RSpec::Transport.new(
+      SpecGuard::Client::Transport.new(
         endpoint: configuration.endpoint,
         api_key: configuration.api_key,
         timeout: configuration.timeout

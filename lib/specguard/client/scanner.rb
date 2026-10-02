@@ -3,7 +3,7 @@
 require "json"
 
 module SpecGuard
-  module RSpec
+  module Client
     # Runs the discovery pipeline over source files and returns {Finding}s.
     #
     # Pipeline, per `@intent:` token:

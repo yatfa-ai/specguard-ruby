@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe SpecGuard::RSpec::Scanner do
+RSpec.describe SpecGuard::Client::Scanner do
   describe ".unreachable_findings_in_text (SPGD-900: the stacked-annotation structural pass)" do
     def findings(text)
       described_class.unreachable_findings_in_text(text, file: "order_spec.rb")
@@ -18,7 +18,7 @@ RSpec.describe SpecGuard::RSpec::Scanner do
 
       expect(findings(text).length).to eq(1)
       expect(findings(text).first.line).to eq(1)
-      expect(findings(text).first.kind).to eq(SpecGuard::RSpec::Finding::KIND_UNREACHABLE)
+      expect(findings(text).first.kind).to eq(SpecGuard::Client::Finding::KIND_UNREACHABLE)
     end
 
     # @intent: { entity: "Scanner", action: "detect stacked annotations", behavior: "a run of three comment-form annotations flags every line except the last, at relative lines one and two", layer: "unit" }
@@ -64,8 +64,8 @@ RSpec.describe SpecGuard::RSpec::Scanner do
       RUBY
 
       expect(findings(text).map(&:line)).to eq([1])
-      expect(findings(text).first.kind).to eq(SpecGuard::RSpec::Finding::KIND_UNREACHABLE)
-      expect(findings(text).first.problem).to eq(SpecGuard::RSpec::Scanner::UNREACHABLE_SHADOWED_ANNOTATION)
+      expect(findings(text).first.kind).to eq(SpecGuard::Client::Finding::KIND_UNREACHABLE)
+      expect(findings(text).first.problem).to eq(SpecGuard::Client::Scanner::UNREACHABLE_SHADOWED_ANNOTATION)
     end
 
     # @intent: { entity: "Scanner", action: "flag each dead line once", behavior: "a two-line comment run above a shadowing example flags lines one and two exactly once, the stacked arm taking the upper and the shadow arm the last", layer: "unit" }
@@ -136,7 +136,7 @@ RSpec.describe SpecGuard::RSpec::Scanner do
 
       expect(findings(text).length).to eq(1)
       expect(findings(text).first.line).to eq(2)
-      expect(findings(text).first.kind).to eq(SpecGuard::RSpec::Finding::KIND_UNREACHABLE)
+      expect(findings(text).first.kind).to eq(SpecGuard::Client::Finding::KIND_UNREACHABLE)
       expect(findings(text).first.problem).to include("example-group line")
     end
 
@@ -296,7 +296,7 @@ RSpec.describe SpecGuard::RSpec::Scanner do
       RUBY
 
       expect(findings(text).map(&:line)).to eq([1])
-      expect(findings(text).first.kind).to eq(SpecGuard::RSpec::Finding::KIND_UNREACHABLE)
+      expect(findings(text).first.kind).to eq(SpecGuard::Client::Finding::KIND_UNREACHABLE)
       expect(findings(text).first.problem).to include("separated from its example")
     end
 

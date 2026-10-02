@@ -2,7 +2,7 @@
 
 require "timeout"
 
-RSpec.describe SpecGuard::RSpec::AnnotationScanner do
+RSpec.describe SpecGuard::Client::AnnotationScanner do
   def intents(text)
     described_class.each_intent(text).to_a
   end
@@ -180,7 +180,7 @@ RSpec.describe SpecGuard::RSpec::AnnotationScanner do
 
     # @intent: { entity: "AnnotationScanner", action: "scan an object", behavior: "an unterminated object literal raises ScanError rather than returning a truncated index", layer: "unit" }
     it "raises on an unterminated literal" do
-      expect { described_class.scan_object("{a: 1", 0) }.to raise_error(SpecGuard::RSpec::ScanError)
+      expect { described_class.scan_object("{a: 1", 0) }.to raise_error(SpecGuard::Client::ScanError)
     end
   end
 
@@ -198,7 +198,7 @@ RSpec.describe SpecGuard::RSpec::AnnotationScanner do
     # @intent: { entity: "AnnotationScanner", action: "scan a string", behavior: "a string that never closes raises ScanError naming the unterminated string", layer: "unit" }
     it "raises on an unterminated string" do
       expect { described_class.scan_string(%("abc), 0, '"') }
-        .to raise_error(SpecGuard::RSpec::ScanError, /unterminated/)
+        .to raise_error(SpecGuard::Client::ScanError, /unterminated/)
     end
   end
 end

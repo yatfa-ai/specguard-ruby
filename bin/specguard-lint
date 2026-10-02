@@ -11,7 +11,7 @@
 #   1  one or more annotations are malformed
 #   2  the linter could not do its job — misuse, or the tool itself broken
 #
-# SpecGuard::RSpec::CLI#run is written to *return* one of those three and never
+# SpecGuard::Client::CLI#run is written to *return* one of those three and never
 # to raise; see its class comment for why that takes deliberate effort in Ruby.
 # The `require` below is the one thing outside its reach, so it gets the same
 # treatment here: a gem that cannot even load is the linter being broken, which
@@ -20,15 +20,15 @@
 
 # Allow running from a source checkout without bundler by putting the local
 # lib/ on the load path. When the gem is installed (or run under
-# `bundle exec`), specguard/rspec resolves through the normal load path.
+# `bundle exec`), specguard/client resolves through the normal load path.
 source_lib = File.expand_path("../lib", __dir__)
 $LOAD_PATH.unshift(source_lib) unless $LOAD_PATH.include?(source_lib)
 
 begin
-  require "specguard/rspec"
+  require "specguard/client"
 rescue ScriptError, StandardError => e
   warn "specguard-lint: error: could not load specguard-ruby: #{e.class}: #{e.message}"
   exit 2
 end
 
-exit SpecGuard::RSpec::CLI.new.run(ARGV)
+exit SpecGuard::Client::CLI.new.run(ARGV)

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe SpecGuard::RSpec::PayloadNormalizer do
+RSpec.describe SpecGuard::Client::PayloadNormalizer do
   def normalize(raw)
     described_class.normalize(raw)
   end
@@ -143,6 +143,6 @@ RSpec.describe SpecGuard::RSpec::PayloadNormalizer do
 
   # @intent: { entity: "PayloadNormalizer", action: "reject unterminated strings", behavior: "a payload whose string literal never closes raises ScanError instead of returning a broken string", layer: "unit" }
   it "raises on an unterminated string literal" do
-    expect { normalize("{entity: 'Order}") }.to raise_error(SpecGuard::RSpec::ScanError)
+    expect { normalize("{entity: 'Order}") }.to raise_error(SpecGuard::Client::ScanError)
   end
 end

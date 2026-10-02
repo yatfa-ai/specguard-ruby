@@ -1,8 +1,14 @@
 module SpecGuard
+  def self.configuration: () -> Client::Configuration
+  def self.configure: () ?{ (Client::Configuration) -> void } -> Client::Configuration
+  def self.reset_configuration!: () -> void
+
   module RSpec
     VERSION: String
 
-    class Error < StandardError
-    end
+    # Delegates to SpecGuard.configure — the same object, not a second one.
+    def self.configuration: () -> Client::Configuration
+    def self.configure: () ?{ (Client::Configuration) -> void } -> Client::Configuration
+    def self.reset_configuration!: () -> void
   end
 end
