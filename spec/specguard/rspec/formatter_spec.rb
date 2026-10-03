@@ -1329,10 +1329,32 @@ RSpec.describe SpecGuard::RSpecFormatter do
         # the run is unaffected, and must name the queue it failed to write.
         expect(errors.string).not_to include("unaffected")
         expect(errors.string).to include("lost", queue)
+        # SPGD-1139: there is nothing to replay on this arm, so the recovery
+        # command must never leak onto it.
+        expect(errors.string).not_to include("specguard-ingest")
         expect(File.exist?(queue)).to be(false)
         # The status survives, and so do the budget and the never-fail
         # contract: making the line true cost none of them.
         expect(errors.string).to include("HTTP 401")
+        expect(errors.string.scan(/SpecGuard:/).length).to eq(1)
+      end
+    end
+
+    # SPGD-1139: the success arm of the delivery-failure line names the way
+    # back, not only the place the run sits. The older pins assert the prefix
+    # and status, which the old line also carried, so this one is on the new
+    # bytes: path, then the replay command in the README's canonical form,
+    # fix-first.
+    # @intent: { entity: "RSpecFormatter delivery", action: "name the replay command", behavior: "a refused delivery that is saved to the replay queue prints one line naming the queue path and the specguard-ingest command that replays it", layer: "unit" }
+    it "names the replay command beside the path the run was saved to" do
+      StubIngestEndpoint.run(status: 401) do |server|
+        queue = File.join(tmpdir, "results.jsonl")
+        deliver_to(server, output_path: queue)
+
+        expect(errors.string).to include(described_class::DELIVERY_WARNING_PREFIX)
+        expect(errors.string).to include("Falling back to #{queue}; the test run is unaffected.")
+        expect(errors.string).to include("bundle exec specguard-ingest #{queue}")
+        expect(errors.string.index("unaffected")).to be < errors.string.index("specguard-ingest")
         expect(errors.string.scan(/SpecGuard:/).length).to eq(1)
       end
     end

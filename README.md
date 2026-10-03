@@ -515,6 +515,7 @@ offered to the endpoint and not accepted — so the run can be replayed later wi
 ```
 SpecGuard: could not deliver test telemetry (HTTP 401 — the API key was not
 accepted). Falling back to log/test_results.jsonl; the test run is unaffected.
+Once the delivery is fixed, replay this run with: bundle exec specguard-ingest log/test_results.jsonl
 ```
 
 **That line carries the endpoint's own words when it has any.** A `400` refusal
@@ -527,7 +528,8 @@ SpecGuard: could not deliver test telemetry (HTTP 400 — the endpoint rejected
 the payload — spec 3 (spec/orders_spec.rb:9): line_number is required and must
 be a positive integer; spec 7 (spec/orders_spec.rb:31): outcome must be one of
 passed, failed, pending). Falling back to log/test_results.jsonl; the test run
-is unaffected.
+is unaffected. Once the delivery is fixed, replay this run with: bundle exec
+specguard-ingest log/test_results.jsonl
 ```
 
 It stays **one** line whatever comes back. A systemic problem can have the

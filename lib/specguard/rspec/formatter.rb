@@ -1202,10 +1202,20 @@ module SpecGuard
     # which of the two things actually happened — see {#fall_back} for why that
     # is the whole of this slice, and why the order above it did not move.
     def sink_clause(path, error)
-      return "Falling back to #{path}; the test run is unaffected." if error.nil?
+      return replay_clause(path) if error.nil?
 
       "The replay queue #{path} could not be written either " \
         "(#{error.class}: #{error.message}), so this run's telemetry was lost."
+    end
+
+    # The success arm (SPGD-1139): where the run sits AND the command that gets
+    # it back, fix-the-delivery first and replay after — the order the ingest
+    # CLI's own doctrine describes. The lost-run arm above deliberately names no
+    # command: with no queue written there is nothing to replay. Kept
+    # word-for-word identical to the Minitest reporter's clause.
+    def replay_clause(path)
+      "Falling back to #{path}; the test run is unaffected. " \
+        "Once the delivery is fixed, replay this run with: bundle exec specguard-ingest #{path}"
     end
 
     def emit_warning(line)
