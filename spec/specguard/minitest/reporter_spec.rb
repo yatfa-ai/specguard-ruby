@@ -832,6 +832,27 @@ module SpecGuard
           end
         end
 
+        # SPGD-1139: the success arm names the configured path and the replay
+        # command, in the same words as the RSpec formatter's line.
+        # @intent: { entity: "Minitest Reporter", action: "name the replay command", behavior: "a rejected delivery saved to the replay queue prints one line naming the queue path and the specguard-ingest command that replays it", layer: "unit" }
+        it "names the replay queue path and the replay command" do
+          Dir.mktmpdir do |dir|
+            sink = File.join(dir, "test_results.jsonl")
+            env = base_env.merge("SPECGUARD_OUTPUT_PATH" => sink)
+            output = StringIO.new
+            reporter = Reporter.new(configuration: configuration(env),
+                                    transport: recording_transport(outcome: :rejected).first,
+                                    output: output)
+            reporter.record(result(:passed))
+            reporter.report
+
+            expect(output.string).to include("Falling back to #{sink}; the test run is unaffected.")
+            expect(output.string).to include("bundle exec specguard-ingest #{sink}")
+            expect(output.string.index("unaffected")).to be < output.string.index("specguard-ingest")
+            expect(output.string.scan("SpecGuard:").length).to eq(1)
+          end
+        end
+
         # @intent: { entity: "Minitest Reporter", action: "sink silently without a key", behavior: "with no api key configured the reporter writes the local sink file and emits no warning at all", layer: "unit" }
         it "writes the sink without any warning when no key is configured" do
           Dir.mktmpdir do |dir|
@@ -1079,6 +1100,8 @@ module SpecGuard
             # And the two facts an operator needs: which refusal, which file.
             expect(output.string).to include("HTTP 400")
             expect(output.string).to include(queue)
+            # SPGD-1139: nothing to replay on this arm — no recovery command.
+            expect(output.string).not_to include("specguard-ingest")
             # Still one line, still green — the budget and the never-fail
             # contract are unchanged by making that line true.
             expect(output.string.scan("SpecGuard:").length).to eq(1)

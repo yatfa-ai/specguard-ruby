@@ -405,10 +405,19 @@ module SpecGuard
       # Report, not promise — see `#fall_back` for why that is the whole of
       # this slice, and why the order above it did not move.
       def sink_clause(path, error)
-        return "Falling back to the replay queue. The test run is unaffected." if error.nil?
+        return replay_clause(path) if error.nil?
 
         "The replay queue #{path} could not be written either " \
           "(#{error.class}: #{error.message}), so this run's telemetry was lost."
+      end
+
+      # The success arm (SPGD-1139): names the configured path (the one
+      # `#append` just wrote) and the replay command, word-for-word the
+      # formatter's clause. The lost-run arm names no command — nothing to
+      # replay.
+      def replay_clause(path)
+        "Falling back to #{path}; the test run is unaffected. " \
+          "Once the delivery is fixed, replay this run with: bundle exec specguard-ingest #{path}"
       end
 
       # Once per process, like the formatter's `warn_once`: fifty failing
