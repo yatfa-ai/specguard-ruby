@@ -7,6 +7,7 @@ require "minitest"
 require "specguard/client/transport"
 require "specguard/minitest/reporter"
 require_relative "../../support/validator_stub"
+require_relative "../../support/stub_ingest_endpoint"
 
 # The Minitest adapter's unit contract: what a `::Minitest::Result` becomes on
 # the wire, and what never happens (a raise, a red suite, a second warning).
@@ -94,6 +95,20 @@ module SpecGuard
             code: outcome == :success ? 202 : 400)
         end
         [transport, -> { captured }, -> { calls }]
+      end
+
+      describe "the repository-scoped route" do
+        # @intent: { entity: "Minitest Reporter", action: "deliver the run", behavior: "with a repository id configured the reporter posts to the repository-scoped route", layer: "unit" }
+        it "posts to the repository-scoped path when SPECGUARD_REPOSITORY_ID is configured" do
+          StubIngestEndpoint.run do |server|
+            env = base_env.merge("SPECGUARD_ENDPOINT" => server.endpoint, "SPECGUARD_REPOSITORY_ID" => "42")
+            reporter = Reporter.new(configuration: configuration(env), output: StringIO.new)
+            reporter.record(result(:passed))
+            reporter.report
+
+            expect(server.requests.map(&:path)).to eq(["/api/v1/repositories/42/ingest"])
+          end
+        end
       end
 
       describe "row mapping" do

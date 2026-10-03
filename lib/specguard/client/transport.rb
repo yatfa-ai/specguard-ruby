@@ -127,6 +127,21 @@ module SpecGuard
       # Part of the platform's contract, so it is not configurable — the
       # `endpoint` setting is the installation's address and nothing more.
       PATH = "/api/v1/ingest"
+
+      # The repository-scoped form of the same endpoint (`post "ingest"` nested
+      # under `resources :repositories`). It exists because an `sga_` agent key
+      # covers a SET of repositories, so the credential cannot name the run's
+      # repository and the request has to, as a path segment. `%s` is only ever
+      # filled with an id that passed {REPOSITORY_ID_PATTERN}. Under an `sgk_`
+      # key the server ignores the segment, so {PATH} stays the default.
+      REPOSITORY_PATH = "/api/v1/repositories/%s/ingest"
+
+      # What a repository id may look like before it becomes a path segment.
+      # Deliberately not "digits": the platform's ids are numeric today and the
+      # gem must not bake that in. Dots are excluded outright, which is what
+      # refuses `..` (percent-escaping would not neutralise a dot segment), and
+      # `/`, `?`, `#` can never survive as path structure.
+      REPOSITORY_ID_PATTERN = /\A[0-9A-Za-z_-]+\z/
       CONTENT_TYPE = "application/json"
       USER_AGENT = "specguard-ruby/#{SpecGuard::VERSION}"
       CONTENT_ENCODING = "gzip"
@@ -167,7 +182,12 @@ module SpecGuard
       # same reason turned around: a 202 whose body will not parse is still an
       # acceptance, and relabelling it would tell the operator something untrue
       # about a run the platform has already stored. See {#test_run_id}.
-      Result = Struct.new(:outcome, :code, :error, :reasons, :body, keyword_init: true) do
+      #
+      # `repository_scoped` is true when the request went to the repository-
+      # scoped route. It only changes the 404 sentence: under that route a 404
+      # means no repository with that id is available to this key, not a wrong
+      # URL. Nil/false (every pre-existing `Result.new`) keeps today's wording.
+      Result = Struct.new(:outcome, :code, :error, :reasons, :body, :repository_scoped, keyword_init: true) do
         # The status codes worth spelling out, because each implies a different
         # thing for the reader to *do*. A 401 means "rotate or fix the key"; a
         # 400 means "the payload this gem built was refused", which is a bug
@@ -192,6 +212,10 @@ module SpecGuard
         # they are near-identical when the cause is systemic — and the count
         # tells the reader how widespread it is.
         MAX_RENDERED_REASONS = 3
+
+        # The 404 sentence when a repository id was sent. See `repository_scoped`.
+        REPOSITORY_NOT_FOUND_ADVICE =
+          "no repository with that id is available to this API key — check SPECGUARD_REPOSITORY_ID"
 
         # Ceiling on the spelled-out reasons, before the `and N more` tail,
         # which is appended afterwards so the count can never be the thing that
@@ -224,12 +248,18 @@ module SpecGuard
         def reason
           case outcome
           when :success then nil
-          when :rejected then [+"HTTP #{code}", ADVICE[code], rendered_reasons].compact.join(" — ")
+          when :rejected then [+"HTTP #{code}", advice, rendered_reasons].compact.join(" — ")
           else "#{error.class}: #{error.message}"
           end
         end
 
         private
+
+        def advice
+          return REPOSITORY_NOT_FOUND_ADVICE if code == 404 && repository_scoped
+
+          ADVICE[code]
+        end
 
         # The refusal, bounded and flattened to fit on the one line. `nil` when
         # there is nothing readable to add, which is what keeps the bare
@@ -270,9 +300,15 @@ module SpecGuard
       # @param timeout [Numeric, String, nil] seconds. Anything that is not a
       #   positive finite number falls back to the default rather than raising:
       #   a typo in `SPECGUARD_TIMEOUT` must not be able to fail a suite.
-      def initialize(endpoint:, api_key:, timeout: Configuration::DEFAULT_TIMEOUT_SECONDS)
+      # @param repository_id [String, Integer, nil] when present, POST to the
+      #   repository-scoped route an `sga_` agent key needs. nil/blank keeps the
+      #   `sgk_` path byte-identical. An id outside {REPOSITORY_ID_PATTERN} makes
+      #   {#uri} raise `ArgumentError`.
+      def initialize(endpoint:, api_key:, timeout: Configuration::DEFAULT_TIMEOUT_SECONDS, repository_id: nil)
         @endpoint = endpoint
         @api_key = api_key
+        @repository_id = repository_id.to_s.strip
+        @repository_id = nil if @repository_id.empty?
         @timeout = sanitize_timeout(timeout)
       end
 
@@ -301,7 +337,8 @@ module SpecGuard
         return Result.new(outcome: :success, code: code, body: success_body(response)) if
           response.is_a?(Net::HTTPSuccess)
 
-        Result.new(outcome: :rejected, code: code, reasons: refusal_reasons(response))
+        Result.new(outcome: :rejected, code: code, reasons: refusal_reasons(response),
+                   repository_scoped: !@repository_id.nil?)
       rescue ScriptError, StandardError => e
         # Connection refused, DNS failure, TLS failure, open/read timeout, a
         # malformed endpoint — one family, one shape. `ScriptError` is in the
@@ -427,7 +464,7 @@ module SpecGuard
         base = @endpoint.to_s.strip
         raise ArgumentError, "no endpoint is configured (set SPECGUARD_ENDPOINT)" if base.empty?
 
-        parsed = URI.parse(base.sub(%r{/+\z}, "") + PATH)
+        parsed = URI.parse(base.sub(%r{/+\z}, "") + ingest_path)
         # `URI::HTTPS < URI::HTTP`, so this admits both and rejects the
         # scheme-less `specguard.example.com` that `URI.parse` happily returns
         # as a `URI::Generic` with a nil host — which `Net::HTTP` would then
@@ -436,6 +473,17 @@ module SpecGuard
           parsed.is_a?(URI::HTTP) && !parsed.host.to_s.empty?
 
         parsed
+      end
+
+      def ingest_path
+        return PATH if @repository_id.nil?
+
+        unless REPOSITORY_ID_PATTERN.match?(@repository_id)
+          raise ArgumentError,
+                "SPECGUARD_REPOSITORY_ID must contain only letters, digits, '-' and '_', got #{@repository_id.inspect}"
+        end
+
+        format(REPOSITORY_PATH, @repository_id)
       end
 
       def sanitize_timeout(value)

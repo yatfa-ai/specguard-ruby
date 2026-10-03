@@ -891,4 +891,109 @@ RSpec.describe SpecGuard::Client::Transport do
         .to raise_error(Interrupt)
     end
   end
+
+  # SPGD-1577: an `sga_` agent key covers a SET of repositories, so the request
+  # (not the credential) names the run's repository, as a path segment.
+  describe "the repository-scoped route" do
+    def repo_transport_to(server, repository_id, **options)
+      described_class.new(endpoint: server.endpoint, api_key: "sga_abc123", timeout: 5,
+                          repository_id: repository_id, **options)
+    end
+
+    # @intent: { entity: "Transport", action: "build the target uri", behavior: "with a repository id the uri path is the repository-scoped ingest route", layer: "unit" }
+    it "targets /api/v1/repositories/<id>/ingest when a repository id is given" do
+      transport = described_class.new(endpoint: "https://specguard.example.com", api_key: "k", repository_id: "42")
+
+      expect(transport.uri.path).to eq("/api/v1/repositories/42/ingest")
+    end
+
+    # @intent: { entity: "Transport", action: "build the target uri", behavior: "a nil or blank repository id leaves the uri byte-identical to the unscoped one", layer: "unit" }
+    it "is byte-identical to the unscoped uri for a nil or blank id" do
+      plain = described_class.new(endpoint: "https://specguard.example.com", api_key: "k").uri.to_s
+
+      [nil, "", "   "].each do |blank|
+        scoped = described_class.new(endpoint: "https://specguard.example.com", api_key: "k", repository_id: blank)
+        expect(scoped.uri.to_s).to eq(plain)
+      end
+    end
+
+    # @intent: { entity: "Transport", action: "deliver the run", behavior: "with a repository id the request on the wire carries the scoped path and the same bearer header", layer: "unit" }
+    it "puts the scoped path on the wire with the same Bearer header" do
+      StubIngestEndpoint.run do |server|
+        repo_transport_to(server, "42").deliver(payload)
+        request = server.requests.first
+
+        expect(request.path).to eq("/api/v1/repositories/42/ingest")
+        expect(request.headers["authorization"]).to eq("Bearer sga_abc123")
+        expect(request.json).to eq(payload)
+      end
+    end
+
+    # @intent: { entity: "Transport", action: "compress large runs", behavior: "a large run on the repository-scoped route is still gzipped", layer: "unit" }
+    it "still gzips a run over the threshold on the scoped route" do
+      big = { "commit_sha" => "a" * 40, "branch" => "main",
+              "specs" => Array.new(2_000) do |i|
+                { "file_path" => "spec/f#{i}_spec.rb", "line_number" => i, "name" => "example number #{i}",
+                  "duration" => 0.01, "outcome" => "passed", "status" => "unannotated", "intent" => nil }
+              end }
+      expect(big.to_json.bytesize).to be > described_class::GZIP_THRESHOLD_BYTES
+
+      StubIngestEndpoint.run do |server|
+        repo_transport_to(server, "42").deliver(big)
+        request = server.requests.first
+
+        expect(request.path).to eq("/api/v1/repositories/42/ingest")
+        expect(request.headers["content-encoding"]).to eq("gzip")
+        expect(request.json).to eq(big)
+      end
+    end
+
+    ["4/../x", "42?x=1", "..", "42#f", "4 2", "a/b", "%2e%2e", "4.2"].each do |unsafe|
+      # @intent: { entity: "Transport", action: "build the target uri", behavior: "a repository id that is unsafe as a path segment is refused rather than concatenated raw", layer: "unit" }
+      it "refuses the path-unsafe id #{unsafe.inspect} from #uri" do
+        transport = described_class.new(endpoint: "https://specguard.example.com", api_key: "k",
+                                        repository_id: unsafe)
+
+        expect { transport.uri }.to raise_error(ArgumentError, /SPECGUARD_REPOSITORY_ID/)
+      end
+
+      # @intent: { entity: "Transport", action: "deliver the run", behavior: "a path-unsafe repository id never reaches the wire", layer: "unit" }
+      it "sends nothing for the path-unsafe id #{unsafe.inspect}" do
+        StubIngestEndpoint.run do |server|
+          result = repo_transport_to(server, unsafe).deliver(payload)
+
+          expect(result).to have_attributes(outcome: :failed)
+          expect(result.error).to be_a(ArgumentError)
+          expect(server.requests).to be_empty
+        end
+      end
+    end
+
+    # @intent: { entity: "Transport", action: "read a refusal", behavior: "a 404 under a repository id does not tell the user to check the endpoint and names the repository id", layer: "unit" }
+    it "renders a 404 under a repository id without the endpoint advice" do
+      StubIngestEndpoint.run(status: 404) do |server|
+        reason = repo_transport_to(server, "42").deliver(payload).reason
+
+        expect(reason).to eq("HTTP 404 — no repository with that id is available to this API key — " \
+                             "check SPECGUARD_REPOSITORY_ID")
+        expect(reason).not_to include("SPECGUARD_ENDPOINT")
+      end
+    end
+
+    # @intent: { entity: "Transport", action: "read a refusal", behavior: "a 404 without a repository id keeps the existing endpoint advice unchanged", layer: "unit" }
+    it "keeps today's exact 404 sentence when no repository id is configured" do
+      StubIngestEndpoint.run(status: 404) do |server|
+        reason = transport_to(server).deliver(payload).reason
+
+        expect(reason).to eq("HTTP 404 — no ingest endpoint at that URL — check SPECGUARD_ENDPOINT")
+      end
+    end
+
+    # @intent: { entity: "Transport", action: "read a refusal", behavior: "a result built without the repository flag keeps the existing 404 sentence", layer: "unit" }
+    it "leaves a Result built without the flag on the existing wording" do
+      result = described_class::Result.new(outcome: :rejected, code: 404)
+
+      expect(result.reason).to eq("HTTP 404 — no ingest endpoint at that URL — check SPECGUARD_ENDPOINT")
+    end
+  end
 end

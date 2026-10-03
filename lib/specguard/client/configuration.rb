@@ -318,6 +318,7 @@ module SpecGuard
       LOCAL_OUTPUT_PATH_KEYS = %w[SPECGUARD_LOCAL_OUTPUT_PATH].freeze
       ENDPOINT_KEYS = %w[SPECGUARD_ENDPOINT].freeze
       API_KEY_KEYS = %w[SPECGUARD_API_KEY].freeze
+      REPOSITORY_ID_KEYS = %w[SPECGUARD_REPOSITORY_ID].freeze
       TIMEOUT_KEYS = %w[SPECGUARD_TIMEOUT].freeze
 
       # The commit the suite ran against. `nil` when nothing said.
@@ -344,7 +345,9 @@ module SpecGuard
       attr_accessor :local_output_path
       # The SpecGuard installation to POST to, scheme and host only:
       # `https://specguard.example.com`. The `/api/v1/ingest` path is the
-      # platform's contract, not a setting. `nil` when nothing said.
+      # platform's contract, not a setting — with one exception: when
+      # {#repository_id} is set the path is `/api/v1/repositories/<id>/ingest`
+      # instead. `nil` when nothing said.
       attr_accessor :endpoint
       # The repository's SpecGuard API key. Present means "deliver over HTTP".
       #
@@ -354,6 +357,16 @@ module SpecGuard
       # nobody can retroactively fix. Send whatever is configured and let a 401
       # be the answer.
       attr_accessor :api_key
+      # The repository the run belongs to, sent as a path segment
+      # (`/api/v1/repositories/<id>/ingest`). Needed by an `sga_` agent key,
+      # which covers a set of repositories and so cannot name the run's
+      # repository itself; under an `sgk_` key the platform ignores it. `nil`
+      # when unset or blank, which keeps the plain `/api/v1/ingest` path.
+      #
+      # Deliberately **not** format-checked against the key prefix or a numeric
+      # shape (same reasoning as {#api_key}): the platform's 400/403/404 is the
+      # answer. {Transport} only refuses ids that are unsafe as a path segment.
+      attr_accessor :repository_id
       # Seconds, applied to opening the connection and to reading the response.
       attr_accessor :timeout
 
@@ -374,6 +387,7 @@ module SpecGuard
         @local_output_path = first_present(env, LOCAL_OUTPUT_PATH_KEYS) || DEFAULT_LOCAL_OUTPUT_PATH
         @endpoint = first_present(env, ENDPOINT_KEYS)
         @api_key = first_present(env, API_KEY_KEYS)
+        @repository_id = first_present(env, REPOSITORY_ID_KEYS)
         @timeout = seconds(first_present(env, TIMEOUT_KEYS)) || DEFAULT_TIMEOUT_SECONDS
       end
 

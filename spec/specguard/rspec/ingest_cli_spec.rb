@@ -108,6 +108,19 @@ RSpec.describe SpecGuard::Client::IngestCLI do
       end
     end
 
+    # @intent: { entity: "specguard-ingest", action: "re-deliver a saved line", behavior: "with SPECGUARD_REPOSITORY_ID set the replayed line goes to the repository-scoped route", layer: "unit" }
+    it "re-delivers to the repository-scoped route when SPECGUARD_REPOSITORY_ID is set" do
+      StubIngestEndpoint.run do |server|
+        code = described_class.new(stdout: stdout, stderr: stderr,
+                                   env: env.merge("SPECGUARD_ENDPOINT" => server.endpoint,
+                                                  "SPECGUARD_REPOSITORY_ID" => "42"))
+                             .run([sink(run_payload)])
+
+        expect(code).to eq(0)
+        expect(server.requests.map(&:path)).to eq(["/api/v1/repositories/42/ingest"])
+      end
+    end
+
     # Criterion 1, whole: the run refused for a rotated key, replayed after the
     # secret is fixed, reaches the platform. Every line, in order.
     # @intent: { entity: "specguard-ingest", action: "deliver a multi-run file", behavior: "every line of a file holding several runs is delivered", layer: "unit" }
@@ -319,6 +332,22 @@ RSpec.describe SpecGuard::Client::IngestCLI do
 
         expect(code).to eq(2)
         expect(err).to include("endpoint must be an http:// or https:// URL")
+      end
+    end
+
+    # @intent: { entity: "specguard-ingest exit contract", action: "exit misuse", behavior: "a path-unsafe repository id exits two once rather than failing every replayed line", layer: "unit" }
+    it "exits 2 once on a path-unsafe SPECGUARD_REPOSITORY_ID, sending nothing" do
+      StubIngestEndpoint.run do |server|
+        code = described_class.new(stdout: stdout, stderr: stderr,
+                                   env: env.merge("SPECGUARD_ENDPOINT" => server.endpoint,
+                                                  "SPECGUARD_REPOSITORY_ID" => "4/../x"))
+                             .run([sink(run_payload, run_payload)])
+
+        expect(code).to eq(2)
+        expect(err).to include("SPECGUARD_REPOSITORY_ID")
+        expect(err.lines.length).to eq(1)
+        expect(out).not_to include("not delivered")
+        expect(server.requests).to be_empty
       end
     end
 

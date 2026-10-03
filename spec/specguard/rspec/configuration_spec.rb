@@ -308,6 +308,22 @@ RSpec.describe SpecGuard::Client::Configuration do
         )
       end
 
+      # @intent: { entity: "Configuration", action: "read transport settings", behavior: "the repository id is read from the environment and stripped", layer: "unit" }
+      it "reads and strips SPECGUARD_REPOSITORY_ID" do
+        configuration = described_class.new(env: env.merge("SPECGUARD_REPOSITORY_ID" => " 42 "), git: no_git)
+
+        expect(configuration.repository_id).to eq("42")
+      end
+
+      [nil, "", "   "].each do |blank|
+        # @intent: { entity: "Configuration", action: "read transport settings", behavior: "an unset or blank repository id is nil so the plain ingest path is kept", layer: "unit" }
+        it "reads #{blank.inspect} as no repository id" do
+          environment = blank.nil? ? env : env.merge("SPECGUARD_REPOSITORY_ID" => blank)
+
+          expect(described_class.new(env: environment, git: no_git).repository_id).to be_nil
+        end
+      end
+
       # `String#to_i` reads "ten" as 0, and Net::HTTP reads a 0 timeout as
       # "give up immediately" — so the naive coercion turns a typo into a run
       # that silently never delivers anything, which is the exact failure this
@@ -485,7 +501,8 @@ RSpec.describe SpecGuard::Client::Configuration do
     it "reads no key list beyond the ones the README accounts for" do
       expect(described_class.constants.grep(/_KEYS\z/).sort).to eq(
         %i[API_KEY_KEYS BRANCH_KEYS COMMIT_SHA_KEYS ENDPOINT_KEYS
-           LOCAL_OUTPUT_PATH_KEYS OUTPUT_PATH_KEYS RUN_ID_KEYS SHARD_ID_KEYS TIMEOUT_KEYS]
+           LOCAL_OUTPUT_PATH_KEYS OUTPUT_PATH_KEYS REPOSITORY_ID_KEYS RUN_ID_KEYS SHARD_ID_KEYS
+           TIMEOUT_KEYS]
       )
     end
 
@@ -498,6 +515,7 @@ RSpec.describe SpecGuard::Client::Configuration do
         "shard_id" => described_class::SHARD_ID_KEYS,
         "endpoint" => described_class::ENDPOINT_KEYS,
         "api_key" => described_class::API_KEY_KEYS,
+        "repository_id" => described_class::REPOSITORY_ID_KEYS,
         "output_path" => described_class::OUTPUT_PATH_KEYS,
         "local_output_path" => described_class::LOCAL_OUTPUT_PATH_KEYS,
         "timeout" => described_class::TIMEOUT_KEYS
@@ -512,6 +530,7 @@ RSpec.describe SpecGuard::Client::Configuration do
                          CIRCLE_NODE_INDEX BUILDKITE_PARALLEL_JOB],
         "endpoint" => %w[SPECGUARD_ENDPOINT],
         "api_key" => %w[SPECGUARD_API_KEY],
+        "repository_id" => %w[SPECGUARD_REPOSITORY_ID],
         "output_path" => %w[SPECGUARD_OUTPUT_PATH],
         "local_output_path" => %w[SPECGUARD_LOCAL_OUTPUT_PATH],
         "timeout" => %w[SPECGUARD_TIMEOUT]
