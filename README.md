@@ -474,6 +474,15 @@ export SPECGUARD_API_KEY=…          # from your repository's settings
 export SPECGUARD_TIMEOUT=10         # optional; seconds, applied to connect and read
 ```
 
+**Using an `sga_` agent key? Also set `SPECGUARD_REPOSITORY_ID`.** An agent key
+covers a set of repositories, so the key cannot say which one a run belongs to;
+the request has to. With `SPECGUARD_REPOSITORY_ID=42` the run is POSTed to
+`<endpoint>/api/v1/repositories/42/ingest` instead of `<endpoint>/api/v1/ingest`
+(`config.repository_id` in Ruby). Under a repository `sgk_` key leave it unset —
+if you do set it, the server ignores it. The id may contain only letters, digits,
+`-` and `_`; anything else is refused before a request is made. A `404` with an
+id configured means no repository with that id is available to the key.
+
 ```ruby
 # ...or in Ruby, if you would rather not use the environment
 SpecGuard.configure do |config|
@@ -630,8 +639,9 @@ specguard-ingest: lines 1, 2 carried ci_run_id 17442 and each came back with
 test_run_id 41f2c9b8 — the endpoint folded them onto one run
 ```
 
-It reads the same `SPECGUARD_ENDPOINT`, `SPECGUARD_API_KEY` and
-`SPECGUARD_TIMEOUT` the formatter does, and sends each line through the same
+It reads the same `SPECGUARD_ENDPOINT`, `SPECGUARD_API_KEY`, `SPECGUARD_REPOSITORY_ID`
+(for `sga_` agent keys — a replay queue written under one is re-delivered to the same
+repository-scoped route) and `SPECGUARD_TIMEOUT` the formatter does, and sends each line through the same
 transport — so a run that was refused for a rotated key appears on the platform
 once the secret is fixed, with the shard folding described in
 [If you shard your suite](#if-you-shard-your-suite) applying exactly as it would
@@ -1214,9 +1224,11 @@ export SPECGUARD_ENDPOINT=https://specguard.internal.example.com
   nothing any other formatter wrote, is read or forwarded.
 - **No environment.** SpecGuard's own code reads a fixed list of variables and
   no others: the ones named in the envelope table above, which fill
-  `commit_sha`, `branch`, `ci_run_id` and `shard_id`; plus four that configure
+  `commit_sha`, `branch`, `ci_run_id` and `shard_id`; plus five that configure
   the gem itself rather than describing your suite — `SPECGUARD_ENDPOINT` (where
-  to send the run), `SPECGUARD_OUTPUT_PATH` (where to write the replay queue —
+  to send the run), `SPECGUARD_REPOSITORY_ID` (which repository an `sga_` agent
+  key's run belongs to — sent as a path segment of the request URL, nothing else),
+  `SPECGUARD_OUTPUT_PATH` (where to write the replay queue —
   runs the endpoint refused or could not be reached for), `SPECGUARD_LOCAL_OUTPUT_PATH`
   (where to write the local development record when there is no key),
   `SPECGUARD_TIMEOUT` (how long to wait), and

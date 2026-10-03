@@ -740,7 +740,7 @@ module SpecGuard
         raise UsageError, "no API key is configured (set SPECGUARD_API_KEY)" if blank?(configuration.api_key)
 
         transport = Transport.new(endpoint: configuration.endpoint, api_key: configuration.api_key,
-                                  timeout: configuration.timeout)
+                                  timeout: configuration.timeout, repository_id: configuration.repository_id)
         # Asked once, here, so a malformed `SPECGUARD_ENDPOINT` is one exit 2
         # rather than N identical `:failed` lines. `Transport#deliver` would
         # otherwise swallow the same `ArgumentError` once per line and report a

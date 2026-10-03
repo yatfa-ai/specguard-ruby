@@ -1043,6 +1043,16 @@ RSpec.describe SpecGuard::RSpecFormatter do
       end
     end
 
+    # @intent: { entity: "RSpecFormatter delivery", action: "POST the run", behavior: "with a repository id configured the formatter posts to the repository-scoped route", layer: "unit" }
+    it "posts to the repository-scoped path when a repository id is configured" do
+      StubIngestEndpoint.run do |server|
+        request = deliver_to(server, repository_id: "42")
+
+        expect(request.path).to eq("/api/v1/repositories/42/ingest")
+        expect(request.headers["authorization"]).to eq("Bearer sgk_abc123")
+      end
+    end
+
     # The point of POSTing at all: the local file is the *fallback*, not a
     # second copy. Writing both would double a shared CI sink's contents for
     # every successful run.

@@ -247,7 +247,8 @@ module SpecGuard
         SpecGuard::Client::Transport.new(
           endpoint: @configuration.endpoint,
           api_key: @configuration.api_key,
-          timeout: @configuration.timeout
+          timeout: @configuration.timeout,
+          repository_id: @configuration.repository_id
         )
       end
 
