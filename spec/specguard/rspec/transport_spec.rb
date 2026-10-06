@@ -969,6 +969,32 @@ RSpec.describe SpecGuard::Client::Transport do
       end
     end
 
+    ["42", "abc", "ABC", "a-b", "a_b", "Ab-9_z"].each do |accepted|
+      # @intent: { entity: "Transport", action: "build the target uri", behavior: "a repository id of digits, letters, hyphen or underscore is accepted and lands verbatim in the scoped path", layer: "unit" }
+      it "accepts the id #{accepted.inspect} into the scoped path" do
+        transport = described_class.new(endpoint: "https://specguard.example.com", api_key: "k",
+                                        repository_id: accepted)
+
+        expect(transport.uri.path).to eq("/api/v1/repositories/#{accepted}/ingest")
+      end
+    end
+
+    {
+      401 => "the API key was not accepted",
+      403 => "this API key may not write to that repository",
+      429 => "rate limited by the endpoint"
+    }.each do |status, advice|
+      # @intent: { entity: "Transport", action: "read a refusal", behavior: "a non-404 refusal under a repository id keeps its own advice and does not name the repository id", layer: "unit" }
+      it "keeps HTTP #{status}'s own advice under a repository id" do
+        StubIngestEndpoint.run(status: status) do |server|
+          reason = repo_transport_to(server, "42").deliver(payload).reason
+
+          expect(reason).to eq("HTTP #{status} — #{advice}")
+          expect(reason).not_to include("SPECGUARD_REPOSITORY_ID")
+        end
+      end
+    end
+
     # @intent: { entity: "Transport", action: "read a refusal", behavior: "a 404 under a repository id does not tell the user to check the endpoint and names the repository id", layer: "unit" }
     it "renders a 404 under a repository id without the endpoint advice" do
       StubIngestEndpoint.run(status: 404) do |server|
