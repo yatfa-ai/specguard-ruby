@@ -48,6 +48,7 @@ require "fileutils"
 require_relative "../rspec"
 require_relative "../client/configuration"
 require_relative "../client/transport"
+require_relative "../client/delivery_warning"
 # Brings the linter's discovery chain with it (Scanner, Finding, Schema). That
 # direction is safe — `specguard/rspec` does not require `rspec/core`, so the
 # linter stays loadable without RSpec; it is only the reverse that would break
@@ -1196,22 +1197,10 @@ module SpecGuard
 
     # Report, not promise. Composed after the write so it can tell the operator
     # which of the two things actually happened — see {#fall_back} for why that
-    # is the whole of this slice, and why the order above it did not move.
+    # is the whole of this slice, and why the order above it did not move. The
+    # wording is shared with the Minitest reporter in {Client::DeliveryWarning}.
     def sink_clause(path, error)
-      return replay_clause(path) if error.nil?
-
-      "The replay queue #{path} could not be written either " \
-        "(#{error.class}: #{error.message}), so this run's telemetry was lost."
-    end
-
-    # The success arm (SPGD-1139): where the run sits AND the command that gets
-    # it back, fix-the-delivery first and replay after — the order the ingest
-    # CLI's own doctrine describes. The lost-run arm above deliberately names no
-    # command: with no queue written there is nothing to replay. Kept
-    # word-for-word identical to the Minitest reporter's clause.
-    def replay_clause(path)
-      "Falling back to #{path}; the test run is unaffected. " \
-        "Once the delivery is fixed, replay this run with: bundle exec specguard-ingest #{path}"
+      SpecGuard::Client::DeliveryWarning.sink_clause(path, error)
     end
 
     def emit_warning(line)
