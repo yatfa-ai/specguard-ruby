@@ -58,9 +58,9 @@ if git rev-parse -q --verify "refs/tags/v$NEW_VERSION" >/dev/null || \
     exit 1
 fi
 if command -v curl >/dev/null 2>&1; then
-    if curl -fsS --max-time 10 "https://rubygems.org/api/v1/versions/specguard-rspec.json" 2>/dev/null \
+    if curl -fsS --max-time 10 "https://rubygems.org/api/v1/versions/specguard-ruby.json" 2>/dev/null \
        | grep -q "\"number\":\"$NEW_VERSION\""; then
-        echo "Error: specguard-rspec $NEW_VERSION is already published on RubyGems"
+        echo "Error: specguard-ruby $NEW_VERSION is already published on RubyGems"
         exit 1
     fi
 fi
