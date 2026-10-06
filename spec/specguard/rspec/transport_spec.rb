@@ -996,4 +996,33 @@ RSpec.describe SpecGuard::Client::Transport do
       expect(result.reason).to eq("HTTP 404 — no ingest endpoint at that URL — check SPECGUARD_ENDPOINT")
     end
   end
+
+  describe ".from_configuration" do
+    let(:configuration) do
+      instance_double(
+        SpecGuard::Client::Configuration,
+        endpoint: "https://specguard.example.com", api_key: "sgk_abc", timeout: 7, repository_id: "42"
+      )
+    end
+
+    # @intent: { entity: "Transport", action: "build from a configuration", behavior: "forwards endpoint, api_key, timeout and repository_id to the constructor unchanged", layer: "unit" }
+    it "passes all four configuration attributes to Transport.new" do
+      allow(described_class).to receive(:new).and_call_original
+
+      described_class.from_configuration(configuration)
+
+      expect(described_class).to have_received(:new).with(
+        endpoint: "https://specguard.example.com", api_key: "sgk_abc", timeout: 7, repository_id: "42"
+      )
+    end
+
+    # @intent: { entity: "Transport", action: "build from a configuration", behavior: "the built transport carries the configured timeout and repository-scoped uri", layer: "unit" }
+    it "returns a transport scoped to the configured repository and timeout" do
+      transport = described_class.from_configuration(configuration)
+
+      expect(transport).to be_a(described_class)
+      expect(transport.timeout).to eq(7)
+      expect(transport.uri.to_s).to eq("https://specguard.example.com/api/v1/repositories/42/ingest")
+    end
+  end
 end

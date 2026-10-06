@@ -1037,12 +1037,7 @@ module SpecGuard
     end
 
     def transport_for(configuration)
-      SpecGuard::Client::Transport.new(
-        endpoint: configuration.endpoint,
-        api_key: configuration.api_key,
-        timeout: configuration.timeout,
-        repository_id: configuration.repository_id
-      )
+      SpecGuard::Client::Transport.from_configuration(configuration)
     end
 
     def blank?(value)

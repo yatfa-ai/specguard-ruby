@@ -293,6 +293,21 @@ module SpecGuard
         end
       end
 
+      # Builds a transport from a {Configuration}, projecting the four settings
+      # every ingest writer forwards (endpoint, api_key, timeout, repository_id)
+      # so a new keyword is threaded in one place rather than in each writer.
+      #
+      # @param configuration [Configuration, #endpoint, #api_key, #timeout, #repository_id]
+      # @return [Transport]
+      def self.from_configuration(configuration)
+        new(
+          endpoint: configuration.endpoint,
+          api_key: configuration.api_key,
+          timeout: configuration.timeout,
+          repository_id: configuration.repository_id
+        )
+      end
+
       # @param endpoint [String, nil] the installation's base URL. Any trailing
       #   slashes are dropped; a path prefix is preserved, so an installation
       #   behind `https://tools.example.com/specguard` works.
