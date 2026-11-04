@@ -1146,8 +1146,8 @@ body is encoded on the wire, never what is in it.
 
 | Field | What it holds | Where it comes from |
 | --- | --- | --- |
-| `commit_sha` | the commit the suite ran against | `SPECGUARD_COMMIT_SHA` if you set it, else `GITHUB_SHA`, `CI_COMMIT_SHA`, `CIRCLE_SHA1`, `BUILDKITE_COMMIT`, `GIT_COMMIT`, else `git rev-parse HEAD` |
-| `branch` | the branch name; `null` on a detached checkout | `SPECGUARD_BRANCH` if you set it, else `GITHUB_REF_NAME`, `CI_COMMIT_REF_NAME`, `CIRCLE_BRANCH`, `BUILDKITE_BRANCH`, `GIT_BRANCH`, else `git symbolic-ref --short -q HEAD` |
+| `commit_sha` | the commit the suite ran against | `SPECGUARD_COMMIT_SHA` if you set it, else — on a same-repository GitHub Actions `pull_request` / `pull_request_target` run — the pushed head sha from the event payload at `GITHUB_EVENT_PATH` (`GITHUB_SHA` there is an ephemeral merge commit), else `GITHUB_SHA`, `CI_COMMIT_SHA`, `CIRCLE_SHA1`, `BUILDKITE_COMMIT`, `GIT_COMMIT`, else `git rev-parse HEAD` |
+| `branch` | the branch name; `null` on a detached checkout | `SPECGUARD_BRANCH` if you set it, else — on a same-repository GitHub Actions `pull_request` / `pull_request_target` run — `GITHUB_HEAD_REF` (`GITHUB_REF_NAME` there is `<n>/merge`), else `GITHUB_REF_NAME`, `CI_COMMIT_REF_NAME`, `CIRCLE_BRANCH`, `BUILDKITE_BRANCH`, `GIT_BRANCH`, else `git symbolic-ref --short -q HEAD` |
 | `ci_run_id` | your provider's build id, so shards of one run fold together; `null` on a laptop | `SPECGUARD_RUN_ID` if you set it, else `GITHUB_RUN_ID`, `CI_PIPELINE_ID`, `CIRCLE_WORKFLOW_ID`, `BUILDKITE_BUILD_ID`, `BUILD_TAG` |
 | `shard_id` | which slice of that run this process is; `null` when unsharded | `SPECGUARD_SHARD_ID` if you set it, else `TEST_ENV_NUMBER`, `CI_NODE_INDEX`, `CIRCLE_NODE_INDEX`, `BUILDKITE_PARALLEL_JOB` |
 | `duration_seconds` | wall clock for the whole run | measured by the formatter |

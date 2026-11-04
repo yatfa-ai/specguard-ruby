@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "fileutils"
+require "json"
 require "tmpdir"
 require "specguard/rspec/formatter"
 
@@ -500,9 +502,9 @@ RSpec.describe SpecGuard::Client::Configuration do
     # @intent: { entity: "Configuration", action: "disclose the env surface", behavior: "no key is read beyond the ones the readme accounts for", layer: "unit" }
     it "reads no key list beyond the ones the README accounts for" do
       expect(described_class.constants.grep(/_KEYS\z/).sort).to eq(
-        %i[API_KEY_KEYS BRANCH_KEYS COMMIT_SHA_KEYS ENDPOINT_KEYS
-           LOCAL_OUTPUT_PATH_KEYS OUTPUT_PATH_KEYS REPOSITORY_ID_KEYS RUN_ID_KEYS SHARD_ID_KEYS
-           TIMEOUT_KEYS]
+        %i[API_KEY_KEYS BRANCH_KEYS COMMIT_SHA_KEYS ENDPOINT_KEYS EVENT_NAME_KEYS EVENT_PATH_KEYS
+           LOCAL_OUTPUT_PATH_KEYS OUTPUT_PATH_KEYS PULL_REQUEST_BRANCH_KEYS REPOSITORY_ID_KEYS
+           RUN_ID_KEYS SHARD_ID_KEYS TIMEOUT_KEYS]
       )
     end
 
@@ -511,6 +513,9 @@ RSpec.describe SpecGuard::Client::Configuration do
       expect(
         "commit_sha" => described_class::COMMIT_SHA_KEYS,
         "branch" => described_class::BRANCH_KEYS,
+        "pull_request_event_name" => described_class::EVENT_NAME_KEYS,
+        "pull_request_event_path" => described_class::EVENT_PATH_KEYS,
+        "pull_request_branch" => described_class::PULL_REQUEST_BRANCH_KEYS,
         "ci_run_id" => described_class::RUN_ID_KEYS,
         "shard_id" => described_class::SHARD_ID_KEYS,
         "endpoint" => described_class::ENDPOINT_KEYS,
@@ -524,6 +529,9 @@ RSpec.describe SpecGuard::Client::Configuration do
                            CIRCLE_SHA1 BUILDKITE_COMMIT GIT_COMMIT],
         "branch" => %w[SPECGUARD_BRANCH GITHUB_REF_NAME CI_COMMIT_REF_NAME
                        CIRCLE_BRANCH BUILDKITE_BRANCH GIT_BRANCH],
+        "pull_request_event_name" => %w[GITHUB_EVENT_NAME],
+        "pull_request_event_path" => %w[GITHUB_EVENT_PATH],
+        "pull_request_branch" => %w[GITHUB_HEAD_REF],
         "ci_run_id" => %w[SPECGUARD_RUN_ID GITHUB_RUN_ID CI_PIPELINE_ID
                           CIRCLE_WORKFLOW_ID BUILDKITE_BUILD_ID BUILD_TAG],
         "shard_id" => %w[SPECGUARD_SHARD_ID TEST_ENV_NUMBER CI_NODE_INDEX
@@ -552,6 +560,161 @@ RSpec.describe SpecGuard::Client::Configuration do
         "commit_sha" => %w[git rev-parse HEAD],
         "branch" => %w[git symbolic-ref --short -q HEAD]
       )
+    end
+  end
+
+  # GitHub Actions `pull_request` / `pull_request_target`: GITHUB_SHA is the
+  # ephemeral merge commit and GITHUB_REF_NAME is `<n>/merge`, so the pushed
+  # head sha comes from the event payload and the branch from GITHUB_HEAD_REF.
+  # Mirrors specguard-ts `test/env.test.ts`.
+  describe "GitHub pull_request runs: the source branch and the pushed head commit" do
+    let(:merge_sha) { "a" * 40 }
+    let(:head_sha) { "b" * 40 }
+    let(:dir) { Dir.mktmpdir("sg-event-") }
+
+    after { FileUtils.remove_entry(dir) }
+
+    def event_file(contents)
+      path = File.join(dir, "event-#{rand(1_000_000)}.json")
+      File.write(path, contents.is_a?(String) ? contents : JSON.generate(contents))
+      path
+    end
+
+    def payload(head_repo, base_repo = "acme/app", sha = head_sha)
+      {
+        "pull_request" => {
+          "head" => { "sha" => sha, "repo" => head_repo.nil? ? nil : { "full_name" => head_repo } },
+          "base" => { "repo" => { "full_name" => base_repo } }
+        }
+      }
+    end
+
+    def pr_env(event_name, event_path, extra = {})
+      env = {
+        "GITHUB_EVENT_NAME" => event_name,
+        "GITHUB_SHA" => merge_sha,
+        "GITHUB_REF_NAME" => "123/merge",
+        "GITHUB_HEAD_REF" => "feature/login",
+        "GITHUB_BASE_REF" => "main"
+      }
+      env["GITHUB_EVENT_PATH"] = event_path unless event_path.nil?
+      env.merge(extra)
+    end
+
+    def config(env)
+      described_class.new(env: env, git: no_git)
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a same-repo pull_request run reports the source branch and the pushed head sha", layer: "unit" }
+    it "resolves the source branch and the pushed head sha on a same-repo pull_request" do
+      configuration = config(pr_env("pull_request", event_file(payload("acme/app"))))
+
+      expect(configuration.branch).to eq("feature/login")
+      expect(configuration.commit_sha).to eq(head_sha)
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a same-repo pull_request_target run reports the source branch and the pushed head sha", layer: "unit" }
+    it "resolves the source branch and the pushed head sha on a same-repo pull_request_target" do
+      configuration = config(pr_env("pull_request_target", event_file(payload("acme/app"))))
+
+      expect(configuration.branch).to eq("feature/login")
+      expect(configuration.commit_sha).to eq(head_sha)
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a fork pull_request keeps the merge ref and the merge sha", layer: "unit" }
+    it "keeps the merge ref and the merge sha for a fork pull_request" do
+      ["contrib/app", nil].each do |head_repo|
+        env = pr_env("pull_request", event_file(payload(head_repo)), "GITHUB_HEAD_REF" => "main")
+        configuration = config(env)
+
+        expect(configuration.branch).to eq("123/merge")
+        expect(configuration.commit_sha).to eq(merge_sha)
+      end
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a push run is unchanged even with GITHUB_HEAD_REF and an event file present", layer: "unit" }
+    it "leaves a push run unchanged even when GITHUB_HEAD_REF and an event file are present" do
+      env = pr_env("push", event_file(payload("acme/app")), "GITHUB_REF_NAME" => "main")
+      configuration = config(env)
+
+      expect(configuration.branch).to eq("main")
+      expect(configuration.commit_sha).to eq(merge_sha)
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a missing, garbled, oversized or non-object payload never raises and falls back to the merge ref", layer: "unit" }
+    it "never raises on a missing, garbled, oversized or non-object payload and falls back" do
+      oversized = JSON.generate({ "pad" => "x" * ((1024 * 1024) + 1) }.merge(payload("acme/app")))
+      paths = [
+        nil,
+        "/nonexistent/event.json",
+        event_file("{not json"),
+        event_file("null"),
+        event_file("[]"),
+        event_file(JSON.generate("pull_request" => "nope")),
+        event_file(oversized),
+        dir # a directory
+      ]
+
+      paths.each do |path|
+        configuration = nil
+        expect { configuration = config(pr_env("pull_request", path)) }.not_to raise_error
+        expect(configuration.commit_sha).to eq(merge_sha), "sha fallback for #{path.inspect}"
+        expect(configuration.branch).to eq("123/merge"), "branch fallback for #{path.inspect}"
+      end
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a same-repo payload with a bad head sha keeps GITHUB_SHA but still names the source branch", layer: "unit" }
+    it "keeps GITHUB_SHA but still names the source branch when the head sha is not 40-hex" do
+      ["abc123", "#{'b' * 39}z", 42, nil].each do |sha|
+        configuration = config(pr_env("pull_request", event_file(payload("acme/app", "acme/app", sha))))
+
+        expect(configuration.commit_sha).to eq(merge_sha)
+        expect(configuration.branch).to eq("feature/login")
+      end
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "explicit SPECGUARD_COMMIT_SHA and SPECGUARD_BRANCH keep absolute precedence independently", layer: "unit" }
+    it "lets SPECGUARD_COMMIT_SHA and SPECGUARD_BRANCH win, each independently" do
+      file = event_file(payload("acme/app"))
+
+      both = config(pr_env("pull_request", file,
+                           "SPECGUARD_COMMIT_SHA" => "explicit-sha", "SPECGUARD_BRANCH" => "explicit-branch"))
+      expect([both.commit_sha, both.branch]).to eq(%w[explicit-sha explicit-branch])
+
+      sha_only = config(pr_env("pull_request", file, "SPECGUARD_COMMIT_SHA" => "explicit-sha"))
+      expect([sha_only.commit_sha, sha_only.branch]).to eq(["explicit-sha", "feature/login"])
+
+      blank = config(pr_env("pull_request", file, "SPECGUARD_COMMIT_SHA" => "  ", "SPECGUARD_BRANCH" => ""))
+      expect([blank.commit_sha, blank.branch]).to eq([head_sha, "feature/login"])
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a same-repo pull_request with a blank GITHUB_HEAD_REF falls through to the remaining branch keys", layer: "unit" }
+    it "falls through to the remaining branch keys when GITHUB_HEAD_REF is blank" do
+      env = pr_env("pull_request", event_file(payload("acme/app")), "GITHUB_HEAD_REF" => "")
+
+      expect(config(env).branch).to eq("123/merge")
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "a pull_request answer stops git being asked and the event file is not read when both are explicit", layer: "unit" }
+    it "does not ask git when the payload answered, nor read the payload when both are explicit" do
+      git = instance_double(SpecGuard::Client::GitCheckout)
+      described_class.new(env: pr_env("pull_request", event_file(payload("acme/app"))), git: git)
+
+      explicit = pr_env("pull_request", "/nonexistent/event.json",
+                        "SPECGUARD_COMMIT_SHA" => "s", "SPECGUARD_BRANCH" => "b")
+      allow(File).to receive(:open).and_call_original
+      described_class.new(env: explicit, git: git)
+
+      expect(File).not_to have_received(:open).with("/nonexistent/event.json", any_args)
+    end
+
+    # @intent: { entity: "Configuration", action: "resolve a pull_request run", behavior: "run id and shard id are untouched by the pull_request resolution", layer: "unit" }
+    it "leaves ci_run_id and shard_id untouched" do
+      env = pr_env("pull_request", event_file(payload("acme/app")),
+                   "GITHUB_RUN_ID" => "17442", "CI_NODE_INDEX" => "3")
+      configuration = config(env)
+
+      expect([configuration.run_id, configuration.shard_id]).to eq(%w[17442 3])
     end
   end
 end
