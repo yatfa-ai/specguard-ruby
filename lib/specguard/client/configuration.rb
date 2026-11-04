@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 module SpecGuard
   module Client
     # Where the checkout is sitting — which commit, and which branch — asked of
@@ -180,6 +182,12 @@ module SpecGuard
       # every GitLab, CircleCI, Buildkite and Jenkins run 400ing as a matter of
       # course — the *default* outcome on four of the five providers this gem is
       # likely to meet.
+      #
+      # On a GitHub Actions `pull_request` / `pull_request_target` run from the
+      # same repository, the pushed head commit in the event payload
+      # (`#pull_request_head`) is consulted *between* `SPECGUARD_COMMIT_SHA` and
+      # the rest of this list: `GITHUB_SHA` there is the ephemeral merge commit
+      # (the base tip on `_target`), a sha nobody pushed.
       COMMIT_SHA_KEYS = %w[
         SPECGUARD_COMMIT_SHA
         GITHUB_SHA
@@ -195,6 +203,11 @@ module SpecGuard
       # (`origin/main` on many setups), because `branch` is a free-form string
       # to the platform and inventing a normalization here would be this gem
       # guessing at somebody's ref layout.
+      #
+      # On a same-repository GitHub Actions `pull_request` /
+      # `pull_request_target` run, {PULL_REQUEST_BRANCH_KEYS} (`GITHUB_HEAD_REF`,
+      # the source branch) is consulted between `SPECGUARD_BRANCH` and the rest
+      # of this list, because `GITHUB_REF_NAME` there is `<n>/merge`.
       BRANCH_KEYS = %w[
         SPECGUARD_BRANCH
         GITHUB_REF_NAME
@@ -314,6 +327,22 @@ module SpecGuard
       # than absent. See trap 1 above.
       BLANK_MEANS_FIRST_SHARD_KEY = "TEST_ENV_NUMBER"
 
+      # GitHub Actions only: the event that triggered the run, the file holding
+      # its payload, and the source branch of a pull request. They are read
+      # only together, by `#pull_request_head`, and only when `GITHUB_EVENT_NAME`
+      # is one of {PULL_REQUEST_EVENTS}.
+      EVENT_NAME_KEYS = %w[GITHUB_EVENT_NAME].freeze
+      EVENT_PATH_KEYS = %w[GITHUB_EVENT_PATH].freeze
+      PULL_REQUEST_BRANCH_KEYS = %w[GITHUB_HEAD_REF].freeze
+
+      # The GitHub events whose `GITHUB_SHA` / `GITHUB_REF_NAME` describe a
+      # merge ref rather than anything a person pushed.
+      PULL_REQUEST_EVENTS = %w[pull_request pull_request_target].freeze
+
+      # Largest `GITHUB_EVENT_PATH` payload read; a bigger file is treated as
+      # unreadable (mirrors specguard-ts).
+      MAX_EVENT_PAYLOAD_BYTES = 1024 * 1024
+
       OUTPUT_PATH_KEYS = %w[SPECGUARD_OUTPUT_PATH].freeze
       LOCAL_OUTPUT_PATH_KEYS = %w[SPECGUARD_LOCAL_OUTPUT_PATH].freeze
       ENDPOINT_KEYS = %w[SPECGUARD_ENDPOINT].freeze
@@ -377,10 +406,22 @@ module SpecGuard
       #   reason, and so a test does not silently pick up the sha or the branch
       #   of whatever repository it runs in.
       def initialize(env: ENV, git: GitCheckout)
-        @commit_sha = first_present(env, COMMIT_SHA_KEYS) || blank_to_nil(git.commit_sha)
+        explicit_sha = first_present(env, COMMIT_SHA_KEYS.first(1))
+        explicit_branch = first_present(env, BRANCH_KEYS.first(1))
+        # One read of the event payload decides branch and sha together, so
+        # they cannot disagree; skipped when both were set explicitly.
+        pr_head = explicit_sha && explicit_branch ? nil : pull_request_head(env)
+
         # `||` short-circuits, which is the whole of "do not spawn a subprocess
         # when a provider already answered".
-        @branch = first_present(env, BRANCH_KEYS) || blank_to_nil(git.branch)
+        @commit_sha = explicit_sha ||
+                      pr_head&.fetch(:sha) ||
+                      first_present(env, COMMIT_SHA_KEYS) ||
+                      blank_to_nil(git.commit_sha)
+        @branch = explicit_branch ||
+                  (pr_head && first_present(env, PULL_REQUEST_BRANCH_KEYS)) ||
+                  first_present(env, BRANCH_KEYS) ||
+                  blank_to_nil(git.branch)
         @run_id = first_present(env, RUN_ID_KEYS)
         @shard_id = resolve_shard_id(env)
         @output_path = first_present(env, OUTPUT_PATH_KEYS) || DEFAULT_OUTPUT_PATH
@@ -392,6 +433,65 @@ module SpecGuard
       end
 
       private
+
+      # The pushed head of a GitHub Actions pull-request run, or nil when it
+      # cannot be established as a SAME-REPOSITORY pull request.
+      #
+      # On `pull_request` / `pull_request_target`, `GITHUB_SHA` is the
+      # ephemeral merge commit (the base tip on `_target`) and
+      # `GITHUB_REF_NAME` is `<n>/merge` — neither is anything a person pushed.
+      # `git rev-parse HEAD` does not rescue it: `actions/checkout` puts the
+      # merge commit at HEAD. The real head sha lives only in the event payload
+      # at `GITHUB_EVENT_PATH`.
+      #
+      # A fork PR yields nil: `GITHUB_HEAD_REF` is then the FORK's branch name
+      # (`main` on a `contrib:main` PR would be filed under the base
+      # repository's own `main`), so the merge-ref behaviour is kept. A
+      # missing, unreadable, oversized or garbled payload also yields nil.
+      # Never raises and shells out to nothing.
+      #
+      # @return [Hash{Symbol=>String,nil}, nil] `{sha:}` — sha is nil when the
+      #   payload's head sha is not 40 hex characters (the branch is still the
+      #   source branch then) — or nil when this is not a same-repo PR.
+      def pull_request_head(env)
+        return nil unless PULL_REQUEST_EVENTS.include?(first_present(env, EVENT_NAME_KEYS))
+
+        path = first_present(env, EVENT_PATH_KEYS)
+        return nil if path.nil?
+
+        pull_request = read_event_payload(path)&.fetch("pull_request", nil)
+        return nil unless pull_request.is_a?(Hash)
+
+        head = pull_request["head"]
+        base = pull_request["base"]
+        head_repo = repo_full_name(head)
+        return nil if head_repo.nil? || head_repo != repo_full_name(base)
+
+        sha = head["sha"]
+        { sha: sha.is_a?(String) && sha.match?(/\A[0-9a-f]{40}\z/i) ? sha : nil }
+      rescue ScriptError, StandardError
+        nil
+      end
+
+      def repo_full_name(side)
+        return nil unless side.is_a?(Hash) && side["repo"].is_a?(Hash)
+
+        name = side["repo"]["full_name"]
+        name.is_a?(String) && !name.empty? ? name : nil
+      end
+
+      # @return [Hash, nil] the parsed payload, or nil if it is absent, not a
+      #   regular file, larger than {MAX_EVENT_PAYLOAD_BYTES}, or not a JSON
+      #   object.
+      def read_event_payload(path)
+        return nil unless File.file?(path)
+
+        raw = File.open(path, "rb") { |file| file.read(MAX_EVENT_PAYLOAD_BYTES + 1) }
+        return nil if raw.nil? || raw.bytesize > MAX_EVENT_PAYLOAD_BYTES
+
+        parsed = JSON.parse(raw)
+        parsed.is_a?(Hash) ? parsed : nil
+      end
 
       # {SHARD_ID_KEYS} in order, first non-blank wins — except that a
       # {BLANK_MEANS_FIRST_SHARD_KEY} which is *set* counts as a hit even when
