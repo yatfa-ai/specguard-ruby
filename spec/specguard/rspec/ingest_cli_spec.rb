@@ -237,6 +237,28 @@ RSpec.describe SpecGuard::Client::IngestCLI do
       end
     end
 
+    # The same hostile input as the `--json` example under the second renderer,
+    # for the prose row: `Transport::Result#one_line` scrubs the invalid byte
+    # before it collapses whitespace, and without that the refusal that explains
+    # the problem is replaced by an "internal error" and exit 2, which is
+    # reserved for "the tool could not do its job".
+    # @intent: { entity: "specguard-ingest exit contract", action: "render a refusal", behavior: "a refusal body carrying an invalid UTF-8 byte still exits one and renders the reason with the byte dropped", layer: "unit" }
+    it "exits 1 and renders the reason with an invalid UTF-8 byte dropped" do
+      body = "{\"details\":[\"specs[0]: bad \xFF name\"]}".b
+
+      StubIngestEndpoint.run(status: 400, body: body) do |server|
+        path = sink(run_payload)
+        code = described_class.new(stdout: stdout, stderr: stderr,
+                                   env: env.merge("SPECGUARD_ENDPOINT" => server.endpoint)).run([path])
+
+        expect(code).to eq(1)
+        expect(out).to include(
+          "line 1: refused — HTTP 400 — the endpoint rejected the payload — specs[0]: bad name"
+        )
+        expect(err).not_to include("internal error")
+      end
+    end
+
     # The 400 is the ONLY status that reaches this code, and this is why:
     # `Api::V1::IngestsController#create` forms an opinion about a payload in
     # exactly one place, `render_bad_request(payload.errors)`. Every other
@@ -2245,6 +2267,21 @@ RSpec.describe SpecGuard::Client::IngestCLI do
       expect(deliver(["--json", sink(run_payload)], status: 400, body: body)).to eq(1)
       expect { document }.not_to raise_error
       expect(document["lines"].first["reasons"].first).to include("\n")
+    end
+
+    # A refusal BODY is bytes off the wire, and Ruby's JSON parser does not
+    # validate the strings it returns, so a proxy (or the platform) echoing a
+    # spec name verbatim can hand the renderer a reason that is not valid UTF-8.
+    # `JSON.pretty_generate` would raise on it and cost the run its whole
+    # document, so the reporter scrubs the byte and keeps the text around it.
+    # @intent: { entity: "specguard-ingest --json", action: "render reasons", behavior: "a reason carrying an invalid UTF-8 byte is scrubbed and the refusal still exits one with a parseable document", layer: "unit" }
+    it "scrubs an invalid UTF-8 byte out of a reason and still exits 1 with a parseable document" do
+      body = "{\"details\":[\"specs[0]: bad \xFF name\"]}".b
+
+      expect(deliver(["--json", sink(run_payload)], status: 400, body: body)).to eq(1)
+      expect(err).not_to include("internal error")
+      expect(document["lines"].first["reasons"]).to eq(["specs[0]: bad  name"])
+      expect(document["lines"].first["status"]).to eq("refused")
     end
 
     # ⭐ Criterion 9. Two renderers of one result list that can disagree about how
