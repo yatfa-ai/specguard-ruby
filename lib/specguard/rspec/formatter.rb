@@ -210,7 +210,7 @@ module SpecGuard
     # that fallback would then print every message a *second* time alongside the
     # formatter {#seed} restores. Listening here suppresses it and takes over its
     # job — see {#message}, which is that same fallback under this class's roof.
-    ::RSpec::Core::Formatters.register self, :example_finished, :stop, :close, :seed, :message
+    ::RSpec::Core::Formatters.register self, :example_finished, :stop, :close, :seed, :message, :dump_summary
 
     # Prefixed so it is obvious in a CI log which tool is talking, and worded so
     # a reader knows immediately that it is not their tests that broke.
@@ -229,6 +229,17 @@ module SpecGuard
     # up and then saw neither a POST nor a line would otherwise have to go
     # looking for a bug that is not there.
     DRY_RUN_WARNING_PREFIX = "SpecGuard: skipped test telemetry for a dry run"
+
+    # The fourth shape: RSpec itself said something went wrong *outside* any
+    # example — a spec file that raised while loading, or a raising
+    # `before(:context)` / `after(:context)` / `after(:suite)` hook — which
+    # `Reporter#notify_non_example_exception` counts into the summary but
+    # attributes to no example. Nothing about this formatter failed; the line
+    # exists because the captured run may then not be the whole suite, and
+    # because a load error leaves RSpec with zero examples, which the platform
+    # would otherwise record as the repository's newest (empty) run. See
+    # {#warn_errors_outside_examples}.
+    OUTSIDE_ERRORS_WARNING_PREFIX = "SpecGuard: RSpec reported"
 
     # The refusal in full, as its own constant rather than a string built at the
     # call site, because {#skip_dry_run} now needs it in two places: appended to
@@ -347,6 +358,7 @@ module SpecGuard
       @error_stream = error_stream
       @annotations = annotations || SpecGuard::Client::AnnotationLookup.new(root: root)
       @specs = []
+      @errors_outside_examples = 0
       @warned = false
       # Stamped here rather than from a `start` hook on purpose. `:start` is not
       # in this formatter's own registered set — it arrives only because
@@ -523,6 +535,23 @@ module SpecGuard
       never_fail_the_run { relay_message(notification) }
     end
 
+    # RSpec's end-of-run summary. The only thing read from it is the count of
+    # errors RSpec reported outside any example (a spec file raising at load, a
+    # raising context or suite hook): `close` turns a positive count into one
+    # `SpecGuard:` line, and into a refusal to deliver when no example was
+    # captured. Deliberately a different hook from {#message}, whose relay of
+    # RSpec's own messages is left alone.
+    #
+    # `respond_to?`-guarded: an rspec-core whose summary lacks the count reads
+    # as "none reported", which is the pre-existing behaviour.
+    def dump_summary(notification)
+      never_fail_the_run do
+        if notification.respond_to?(:errors_outside_of_examples_count)
+          @errors_outside_examples = notification.errors_outside_of_examples_count.to_i
+        end
+      end
+    end
+
     # One example finished — passed, failed or pending. Called for every
     # example in the run, in the order they complete.
     def example_finished(notification)
@@ -547,6 +576,7 @@ module SpecGuard
         @duration_seconds ||= elapsed_since_start
         deliver(payload)
       end
+      never_fail_the_run { warn_errors_outside_examples }
       never_fail_the_run { super(notification) }
     end
 
@@ -748,6 +778,7 @@ module SpecGuard
     # it. {#dry_run?} has the argument in full.
     def deliver(data)
       return skip_dry_run if dry_run?
+      return if aborted_run?
 
       configuration = SpecGuard::RSpec.configuration
       return append_local(data) if blank?(configuration.api_key)
@@ -759,6 +790,39 @@ module SpecGuard
       return if result.success?
 
       fall_back(data, result.reason)
+    end
+
+    # A run that captured nothing while RSpec reported errors outside examples
+    # is a run that aborted — in practice a spec file that raised at load, so
+    # RSpec ran zero examples. Delivering it would post `specs: []`, which the
+    # platform accepts and records as the repository's newest run, replacing the
+    # last real one with an empty one. It goes to neither sink (nothing worth
+    # replaying: the next run will measure the suite properly). A run with the
+    # same errors but at least one captured example — a raising hook after
+    # passing examples — is real data and is delivered.
+    def aborted_run?
+      @errors_outside_examples.positive? && @specs.empty?
+    end
+
+    # The one `SpecGuard:` line for errors RSpec reported outside examples.
+    #
+    # It does not go through {#emit_warning}: it is not a telemetry failure and
+    # must not spend the budget a genuine delivery failure needs. A dry run
+    # says nothing here — {#skip_dry_run} already printed the run's one
+    # `SpecGuard:` line, and a second would only repeat or contradict it.
+    # Parallel shards each print their own line; there is nothing to coordinate.
+    def warn_errors_outside_examples
+      count = @errors_outside_examples
+      return unless count.positive?
+      return if dry_run?
+
+      line = "#{OUTSIDE_ERRORS_WARNING_PREFIX} #{count} #{pluralize(count, 'error')} outside of examples " \
+             "(a spec file that failed to load, or a failing context or suite hook), so the " \
+             "captured run may not be the whole suite; look at the RSpec error blocks above."
+      line += " No examples were captured, so nothing was sent or written." if aborted_run?
+      @error_stream.puts(line)
+    rescue ScriptError, StandardError
+      nil
     end
 
     # The checks worth doing *before* spending the run's wall clock on a request

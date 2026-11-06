@@ -131,11 +131,11 @@ RSpec.describe SpecGuard::RSpecFormatter do
     # `:message` here and `#message` becomes dead code *and* the duplication
     # comes back — this list is the only thing that decides whether either hook
     # is ever called.
-    # @intent: { entity: "RSpecFormatter", action: "register with RSpec", behavior: "the formatter subscribes to exactly the five notifications it implements", layer: "unit" }
-    it "is registered for the five notifications it implements" do
+    # @intent: { entity: "RSpecFormatter", action: "register with RSpec", behavior: "the formatter subscribes to exactly the six notifications it implements", layer: "unit" }
+    it "is registered for the six notifications it implements" do
       registered = RSpec::Core::Formatters::Loader.formatters[described_class]
 
-      expect(registered).to contain_exactly(:example_finished, :stop, :close, :seed, :message)
+      expect(registered).to contain_exactly(:example_finished, :stop, :close, :seed, :message, :dump_summary)
     end
 
     # @intent: { entity: "RSpecFormatter", action: "register with RSpec", behavior: "being a BaseFormatter, RSpec accepts it as an additional format alongside the usual one", layer: "unit" }
@@ -1996,6 +1996,189 @@ RSpec.describe SpecGuard::RSpecFormatter do
       allow(File).to receive(:open).with(local_sink, "a").and_raise(Interrupt)
 
       expect { formatter.close(nil) }.to raise_error(Interrupt)
+    end
+  end
+
+  # RSpec counts failures outside any example (a spec file raising at load, a
+  # raising `after(:context)` / `after(:suite)` hook) into the summary's
+  # `errors_outside_of_examples_count` and attributes them to no example. Until
+  # `#dump_summary` read that count, a load error shipped `specs: []` and a hook
+  # error shipped an all-green run, both with nothing on stderr. The end-to-end
+  # half (real rspec processes, a real endpoint) is in formatter_run_spec.rb.
+  describe "errors RSpec reported outside of examples" do
+    def summarise(errors_outside)
+      formatter.dump_summary(
+        instance_double(RSpec::Core::Notifications::SummaryNotification,
+                        errors_outside_of_examples_count: errors_outside)
+      )
+    end
+
+    def spec_guard_lines
+      errors.string.lines.grep(/\ASpecGuard:/)
+    end
+
+    # A regular file where the sink's directory has to go (root ignores chmod).
+    def unwritable_sink!
+      blocker = File.join(tmpdir, "blocker")
+      File.write(blocker, "not a directory")
+      SpecGuard::RSpec.configure { |config| config.local_output_path = File.join(blocker, "results.jsonl") }
+    end
+
+    context "when the run captured examples and RSpec reported errors outside them" do
+      before do
+        finish(build_example)
+        summarise(2)
+        formatter.close(nil)
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "warn", behavior: "a run with errors outside examples prints one SpecGuard line naming the count and the consequence", layer: "unit" }
+      it "prints one SpecGuard line naming the count and that the capture may be partial" do
+        expect(spec_guard_lines.length).to eq(1)
+        expect(spec_guard_lines.first).to start_with(described_class::OUTSIDE_ERRORS_WARNING_PREFIX)
+        expect(spec_guard_lines.first).to include("2 errors outside of examples")
+        expect(spec_guard_lines.first).to include("may not be the whole suite")
+        expect(spec_guard_lines.first).to include("RSpec error blocks above")
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "deliver", behavior: "a run with captured examples is still delivered despite errors outside examples", layer: "unit" }
+      it "still delivers the run" do
+        expect(local_sink_lines.length).to eq(1)
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "warn", behavior: "the warning for a delivered run does not claim that nothing was sent", layer: "unit" }
+      it "does not claim that nothing was sent" do
+        expect(errors.string).not_to include("nothing was sent")
+      end
+    end
+
+    # The singular, because a count of one is the common case (one broken file).
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "warn", behavior: "a single error is worded in the singular", layer: "unit" }
+    it "words a single error in the singular" do
+      finish(build_example)
+      summarise(1)
+      formatter.close(nil)
+
+      expect(errors.string).to include("1 error outside of examples")
+    end
+
+    context "when nothing was captured and RSpec reported errors outside examples" do
+      before do
+        summarise(1)
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "refuse an aborted run", behavior: "an aborted run with zero examples writes nothing to either sink", layer: "unit" }
+      it "writes to neither sink" do
+        formatter.close(nil)
+
+        expect(sink_lines).to be_empty
+        expect(local_sink_lines).to be_empty
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "refuse an aborted run", behavior: "an aborted run with zero examples issues no POST even with an api key configured", layer: "unit" }
+      it "issues no POST, even with an API key and an endpoint configured" do
+        StubIngestEndpoint.run do |server|
+          SpecGuard::RSpec.configure do |config|
+            config.endpoint = server.endpoint
+            config.api_key = "sgk_abc123"
+            config.timeout = 5
+          end
+
+          formatter.close(nil)
+
+          expect(server.requests).to be_empty
+        end
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "refuse an aborted run", behavior: "the aborted run is refused in the same single SpecGuard line that reports the errors", layer: "unit" }
+      it "says so in the same single SpecGuard line" do
+        formatter.close(nil)
+
+        expect(spec_guard_lines.length).to eq(1)
+        expect(spec_guard_lines.first).to include("1 error outside of examples")
+        expect(spec_guard_lines.first).to include("No examples were captured, so nothing was sent or written.")
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "refuse an aborted run", behavior: "an aborted run is not delivered but its empty capture remains inspectable", layer: "unit" }
+      it "leaves #payload inspectable" do
+        formatter.close(nil)
+
+        expect(formatter.payload["specs"]).to eq([])
+      end
+    end
+
+    # Negative control for everything above: RSpec hands every summary a count,
+    # and zero is the ordinary value.
+    context "on a clean run" do
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "stay quiet", behavior: "a clean run prints nothing and is delivered", layer: "unit" }
+      it "prints nothing and delivers" do
+        finish(build_example)
+        summarise(0)
+        formatter.close(nil)
+
+        expect(errors.string).to be_empty
+        expect(local_sink_lines.length).to eq(1)
+      end
+    end
+
+    # An empty run with NO reported errors (a filter that matched nothing) is
+    # not an aborted run and keeps its existing behaviour.
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "stay quiet", behavior: "an empty run with no errors outside examples is delivered as before", layer: "unit" }
+    it "still delivers an empty run when no errors were reported" do
+      summarise(0)
+      formatter.close(nil)
+
+      expect(errors.string).to be_empty
+      expect(local_sink_lines.length).to eq(1)
+    end
+
+    context "when RSpec is in dry-run mode" do
+      before do
+        configuration = instance_double(RSpec::Core::Configuration, dry_run?: true)
+        allow(formatter).to receive(:rspec_configuration).and_return(configuration)
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "defer to the dry-run refusal", behavior: "a dry run with errors outside examples prints only the dry-run line", layer: "unit" }
+      it "prints only the dry-run refusal, never a second SpecGuard line" do
+        finish(build_example)
+        summarise(1)
+        formatter.close(nil)
+
+        expect(spec_guard_lines.length).to eq(1)
+        expect(spec_guard_lines.first).to start_with(described_class::DRY_RUN_WARNING_PREFIX)
+        expect(errors.string).not_to include(described_class::OUTSIDE_ERRORS_WARNING_PREFIX)
+      end
+
+      # @intent: { entity: "RSpecFormatter outside-example errors", action: "defer to the dry-run refusal", behavior: "a zero-example dry run with errors outside examples still prints only the dry-run line", layer: "unit" }
+      it "does the same when no example was captured" do
+        summarise(1)
+        formatter.close(nil)
+
+        expect(spec_guard_lines.length).to eq(1)
+        expect(spec_guard_lines.first).to start_with(described_class::DRY_RUN_WARNING_PREFIX)
+      end
+    end
+
+    # The delivery warning is a different fact and must keep its own budget:
+    # an errors-outside line must not silence it.
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "keep the delivery warning", behavior: "the outside-example line does not spend the one-shot delivery-warning budget", layer: "unit" }
+    it "does not spend the run's one telemetry-failure warning" do
+      finish(build_example)
+      summarise(1)
+      unwritable_sink!
+      formatter.close(nil)
+
+      expect(spec_guard_lines.length).to eq(2)
+      expect(errors.string).to include("could not write telemetry")
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "never fail the run", behavior: "a summary without the count, or a dead error stream, never raises out of the hooks", layer: "unit" }
+    it "cannot raise out of the formatter" do
+      formatter.dump_summary(nil)
+      formatter.dump_summary(Object.new)
+      summarise(3)
+      allow(errors).to receive(:puts).and_raise(IOError, "closed stream")
+
+      expect { formatter.close(nil) }.not_to raise_error
     end
   end
 end
