@@ -612,6 +612,29 @@ that runs `rspec --dry-run` to catch an unparseable spec file inherits the key
 and would otherwise overwrite your suite's real duration and pass/fail picture
 with zeroes and green.
 
+**Errors outside examples are reported, and an aborted run is not delivered.**
+RSpec counts failures that belong to no example — a spec file that raises while
+loading, a raising `before(:context)` / `after(:context)` / `after(:suite)`
+hook — in its own summary ("N errors occurred outside of examples") and exits 1,
+but the example rows the formatter captures say nothing about them. When that
+count is positive the formatter prints one `SpecGuard:` line to stderr:
+
+```
+SpecGuard: RSpec reported 1 error outside of examples (a spec file that failed
+to load, or a failing context or suite hook), so the captured run may not be
+the whole suite; look at the RSpec error blocks above.
+```
+
+If the run also captured **zero examples** — the usual result of a load error —
+it is treated as aborted: nothing is POSTed and nothing is written to
+`log/test_results.jsonl`, and the same line adds *No examples were captured, so
+nothing was sent or written.* Delivering it would post an empty run, which the
+platform accepts and shows as the repository's newest run in place of the last
+real one. A run with errors outside examples **and** at least one captured
+example (a hook that raises after the examples passed) is still delivered, with
+the warning. A clean run prints nothing, a dry run keeps its own single line
+above instead, and parallel shards each print their own.
+
 It **never blocks CI.** RSpec does not sandbox formatters — an exception raised
 in one escapes the runner and takes RSpec's own exit code with it — so every
 hook rescues, warns once on stderr, and leaves the exit status to your suite

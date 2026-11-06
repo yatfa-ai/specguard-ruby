@@ -2025,4 +2025,85 @@ RSpec.describe "SpecGuard::RSpecFormatter in a real rspec run" do
       expect(violations).to be_empty
     end
   end
+  # SPGD-2078. RSpec counts failures that belong to no example — a spec file
+  # raising at load, a raising `after(:context)` / `after(:suite)` hook — into
+  # the summary and exits 1. A load error leaves zero examples, and `specs: []`
+  # is accepted by the platform and recorded as the repository's newest run;
+  # a hook error leaves an all-green capture. Both used to be silent on stderr.
+  describe "when RSpec reports errors outside of any example (SPGD-2078)" do
+    before(:context) do
+      load_error_file = "raise 'LOAD-BLEW-UP'\n"
+      StubIngestEndpoint.run(status: 202) do |server|
+        prepare = ->(_root) { transport_env(server) }
+
+        @load_error = run_rspec(nil, files: { "broken_spec.rb" => load_error_file }, prepare: prepare)
+        @load_error_requests = server.requests.dup
+
+        @hook_error = run_rspec(FormatterRunHelpers::NON_EXAMPLE_ERROR_SUITE, prepare: prepare)
+        @hook_error_requests = server.requests - @load_error_requests
+
+        @clean = run_rspec(FormatterRunHelpers::GREEN_SUITE, prepare: prepare)
+        @clean_requests = server.requests - @load_error_requests - @hook_error_requests
+      end
+      @load_error_keyless = run_rspec(nil, files: { "broken_spec.rb" => load_error_file })
+      @hook_error_dry = run_rspec(FormatterRunHelpers::NON_EXAMPLE_ERROR_SUITE, dry_run: true)
+    end
+
+    # The control: the harness really produced a load error with zero examples.
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "refuse an aborted run", behavior: "a spec file that raises at load runs zero examples and RSpec exits non-zero", layer: "integration" }
+    it "reproduces a load error as zero examples and a failing exit" do
+      expect(@load_error.stdout).to include("0 examples, 0 failures, 1 error occurred outside of examples")
+      expect(@load_error.exit_status).to eq(1)
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "refuse an aborted run", behavior: "a load-error run is not delivered to the endpoint", layer: "integration" }
+    it "does not POST the empty run" do
+      expect(@load_error_requests).to be_empty
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "refuse an aborted run", behavior: "a load-error run writes no local record either", layer: "integration" }
+    it "does not append the empty run to the local sink" do
+      expect(@load_error_keyless.lines).to be_empty
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "warn", behavior: "a load-error run says on stderr that it was not delivered", layer: "integration" }
+    it "says so, once, on stderr" do
+      lines = @load_error.stderr.lines.grep(/\ASpecGuard:/)
+
+      expect(lines.length).to eq(1)
+      expect(lines.first).to include("1 error outside of examples")
+      expect(lines.first).to include("nothing was sent or written")
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "deliver", behavior: "a hook-error run with captured examples is still delivered", layer: "integration" }
+    it "still delivers a hook-error run that captured examples" do
+      expect(@hook_error.exit_status).to eq(1)
+      expect(@hook_error_requests.length).to eq(1)
+      expect(@hook_error_requests.first.json["specs"].length).to eq(1)
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "warn", behavior: "a hook-error run warns that the capture may be partial without claiming it was withheld", layer: "integration" }
+    it "warns that the capture may be partial, without saying it was withheld" do
+      lines = @hook_error.stderr.lines.grep(/\ASpecGuard:/)
+
+      expect(lines.length).to eq(1)
+      expect(lines.first).to include("1 error outside of examples")
+      expect(lines.first).to include("may not be the whole suite")
+      expect(lines.first).not_to include("nothing was sent")
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "stay quiet", behavior: "a clean run prints nothing on stderr and is delivered", layer: "integration" }
+    it "is silent and delivered on a clean run" do
+      expect(@clean.stderr).to be_empty
+      expect(@clean_requests.length).to eq(1)
+    end
+
+    # @intent: { entity: "RSpecFormatter outside-example errors", action: "defer to the dry-run refusal", behavior: "a dry run with an error outside examples prints the single dry-run line only", layer: "integration" }
+    it "prints a single, non-contradictory line for a dry run" do
+      lines = @hook_error_dry.stderr.lines.grep(/\ASpecGuard:/)
+
+      expect(lines.length).to eq(1)
+      expect(lines.first).to start_with("SpecGuard: skipped test telemetry for a dry run")
+    end
+  end
 end
