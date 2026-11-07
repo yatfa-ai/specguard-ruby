@@ -50,6 +50,7 @@ require_relative "../client/configuration"
 require_relative "../client/transport"
 require_relative "../client/delivery_warning"
 require_relative "../client/path_root"
+require_relative "../client/root_binding"
 # Brings the linter's discovery chain with it (Scanner, Finding, Schema). That
 # direction is safe — `specguard/rspec` does not require `rspec/core`, so the
 # linter stays loadable without RSpec; it is only the reverse that would break
@@ -274,42 +275,7 @@ module SpecGuard
       example_started example_passed example_failed example_pending dump_summary
     ].freeze
 
-    class << self
-      # `Dir.pwd` bound once — by the first formatter construction (whose
-      # `#initialize` reads it, SPGD-1429) or the first direct read — never
-      # per row: a suite that changes the working directory after the
-      # formatter was built would otherwise relativize one run's rows
-      # against two different roots. The memo is what binds it — an
-      # unmemoized `Dir.pwd` here re-reads the cwd on every read and is
-      # exactly the two-root split the constructor's comment names, with
-      # both spellings individually well-formed so nothing downstream can
-      # detect the drift. The memo is also the ONE value the default
-      # annotation lookup reads against: `#initialize` hands it over, so
-      # the relativization root and the lookup's read root cannot drift
-      # apart the way they did when each bound `Dir.pwd` at its own moment.
-      def repo_root
-        @repo_root ||= Dir.pwd
-      end
-
-      # The directory every shipped row path is relative to (SPGD-2109): the
-      # git toplevel of {repo_root}, or {repo_root} itself outside a
-      # repository. Derived from the ONE bound {repo_root} and probed once
-      # per binding — the same one-binding discipline, so a run started from
-      # a monorepo package subdirectory ships `gems/a/spec/x_spec.rb` rather
-      # than a name every sibling package shares. {repo_root} stays the
-      # READ root (the annotation lookup resolves spec source against it);
-      # the two are deliberately not one value.
-      def path_root
-        bound = repo_root
-        @path_root_binding = nil unless @path_root_binding&.first == bound
-        (@path_root_binding ||= [bound, SpecGuard::Client::PathRoot.resolve(bound)]).last
-      end
-
-      # {repo_root} relative to {path_root}; empty when they coincide.
-      def path_prefix
-        SpecGuard::Client::PathRoot.prefix(repo_root, path_root)
-      end
-    end
+    extend SpecGuard::Client::RootBinding
 
     # @param output [IO] the stream RSpec hands every formatter. This class's
     #   product is a file, so nothing in the capture path writes here — but the

@@ -22,6 +22,7 @@ require_relative "../client/delivery_warning"
 # stays loadable.
 require_relative "../client/annotation_lookup"
 require_relative "../client/path_root"
+require_relative "../client/root_binding"
 
 # The Minitest half of `specguard-ruby`. Everything the RSpec formatter knows
 # about the platform — the envelope's field names, the transport's
@@ -61,39 +62,7 @@ module SpecGuard
       # whose file cannot be named fits no by-file aggregate on the platform
       # and would surface as noise. The RSpec formatter's `capture` makes the
       # equivalent call about a metadata-less example.
-      class << self
-        # `Dir.pwd` bound once — by the first `Reporter.new` (whose
-        # `#initialize` reads it, SPGD-1421) or the first direct read — never
-        # per row: a reporter constructed inside a test that changes the
-        # working directory would otherwise relativize one suite's rows
-        # against two different roots. The memo is what binds it — an
-        # unmemoized `Dir.pwd` here re-reads the cwd on every row and is
-        # exactly the two-root split this comment names, with both spellings
-        # individually well-formed so nothing downstream can detect the
-        # drift. The memo is also the ONE value the annotation lookup reads
-        # against: `#initialize` hands it over, so the relativization root
-        # and the lookup's read root cannot drift apart the way they did when
-        # each bound `Dir.pwd` at its own moment.
-        def repo_root
-          @repo_root ||= Dir.pwd
-        end
-
-        # The directory every shipped row path is relative to (SPGD-2109): the
-        # git toplevel of {repo_root}, or {repo_root} itself outside a
-        # repository. Derived from the ONE bound {repo_root} and probed once
-        # per binding. {repo_root} stays the READ root the annotation lookup
-        # resolves against; the two are deliberately not one value.
-        def path_root
-          bound = repo_root
-          @path_root_binding = nil unless @path_root_binding&.first == bound
-          (@path_root_binding ||= [bound, SpecGuard::Client::PathRoot.resolve(bound)]).last
-        end
-
-        # {repo_root} relative to {path_root}; empty when they coincide.
-        def path_prefix
-          SpecGuard::Client::PathRoot.prefix(repo_root, path_root)
-        end
-      end
+      extend SpecGuard::Client::RootBinding
 
       def initialize(configuration: SpecGuard.configuration,
                      transport: nil, output: $stderr,
