@@ -423,6 +423,19 @@ have named, not against a `spec/support/` helper.
 `file_path` and `line_number` keep meaning the **definition** site — that is the line the `@intent:`
 annotation is read from.
 
+**Paths are relative to the git repository root.** Run from a gem or engine subdirectory of a
+monorepo (`gems/a`, `gems/b`), the formatter and the Minitest reporter ship `gems/a/spec/util_spec.rb`
+— not the working-directory-relative `spec/util_spec.rb` that every sibling package would share, which
+made two packages' same-named specs collide on one run id and silently drop one package's rows. The
+root is `git rev-parse --show-toplevel`, resolved once per run; outside a git repository (or when git
+is missing) it is the working directory, and a run from the repository root ships exactly what it
+always did. Annotations are still read from the working directory, so annotated specs in a
+subdirectory run stay annotated. `specguard-lint` output stays working-directory-relative (display
+only). **One-time discontinuity:** if you already run from a subdirectory of a repository, the
+`file_path`, `spec_file_path` and `id` values change on the first run after upgrading
+(`spec/util_spec.rb` → `gems/a/spec/util_spec.rb`), so per-file history for those specs restarts under
+the new names.
+
 An example counts as **annotated** when an `@intent:` sits on its `it` line, or on the comment line
 immediately above it:
 
@@ -1180,8 +1193,8 @@ body is encoded on the wire, never what is in it.
 
 | Field | What it holds | Where it comes from |
 | --- | --- | --- |
-| `id` | RSpec's own example id, `./spec/orders_spec.rb[1:2]` — the re-run argument | `example.id` |
-| `spec_file_path` | the spec file that **ran** the example, relative to the project root when it lives under it — an absolute path when it does not, because a spec outside the working directory has no relative name | `metadata[:rerun_file_path]` |
+| `id` | RSpec's own example id, `./spec/orders_spec.rb[1:2]` — the re-run argument. From a subdirectory of a git repository the path half is repo-relative (`gems/a/spec/orders_spec.rb[1:2]`) | `example.id` |
+| `spec_file_path` | the spec file that **ran** the example, relative to the git repository root (the working directory when not in a git repo) when it lives under it — an absolute path when it does not, because a spec outside that root has no relative name | `metadata[:rerun_file_path]` |
 | `file_path` | the spec file the example is **defined** in, on the same terms | `metadata[:file_path]` |
 | `line_number` | the line it is defined on | `metadata[:line_number]` |
 | `name` | the composed `describe`/`context`/`it` string | `example.full_description` |

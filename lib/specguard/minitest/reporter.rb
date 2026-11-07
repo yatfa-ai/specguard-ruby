@@ -21,6 +21,7 @@ require_relative "../client/delivery_warning"
 # `specguard/client` does not require `rspec/core`, so a minitest-only machine
 # stays loadable.
 require_relative "../client/annotation_lookup"
+require_relative "../client/path_root"
 
 # The Minitest half of `specguard-ruby`. Everything the RSpec formatter knows
 # about the platform — the envelope's field names, the transport's
@@ -76,6 +77,22 @@ module SpecGuard
         def repo_root
           @repo_root ||= Dir.pwd
         end
+
+        # The directory every shipped row path is relative to (SPGD-2109): the
+        # git toplevel of {repo_root}, or {repo_root} itself outside a
+        # repository. Derived from the ONE bound {repo_root} and probed once
+        # per binding. {repo_root} stays the READ root the annotation lookup
+        # resolves against; the two are deliberately not one value.
+        def path_root
+          bound = repo_root
+          @path_root_binding = nil unless @path_root_binding&.first == bound
+          (@path_root_binding ||= [bound, SpecGuard::Client::PathRoot.resolve(bound)]).last
+        end
+
+        # {repo_root} relative to {path_root}; empty when they coincide.
+        def path_prefix
+          SpecGuard::Client::PathRoot.prefix(repo_root, path_root)
+        end
       end
 
       def initialize(configuration: SpecGuard.configuration,
@@ -108,6 +125,8 @@ module SpecGuard
         # binds one root, hands it to the default lookup, and pins rspec-core's
         # lazily memoized relativization regex to the same moment.)
         root = self.class.repo_root
+        # Probed at the same moment, once, never mid-run (SPGD-2109).
+        self.class.path_root
         @annotations = annotations || SpecGuard::Client::AnnotationLookup.new(root: root)
         @clock = clock
         @rows = []
@@ -264,10 +283,15 @@ module SpecGuard
         # the RSpec formatter makes about a metadata-less example.
         return nil if file.to_s.strip.empty? || line.to_i.zero?
 
+        # `read_file` is the cwd-relative spelling the annotation lookup
+        # resolves against the read root; `file` is what ships, relative to
+        # the path root (SPGD-2109). Equal unless the run started below the
+        # git toplevel.
+        read_file = read_relative_path(file)
         file = relative_path(file)
         name = "#{result.klass}##{result.name}"
         line_number = line&.to_i
-        intent = annotation_for(file, line_number)
+        intent = annotation_for(read_file, line_number)
         {
           # Minitest has no RSpec-style rerun path or nested ids, so the
           # definition site is the row's id — the run-local primary key for
@@ -328,7 +352,20 @@ module SpecGuard
         "passed"
       end
 
+      # Relative to the path root (the git toplevel; the working directory
+      # outside a repository) — the identity a platform aggregate groups by.
       def relative_path(path)
+        root = self.class.path_root
+        prefix = self.class.path_prefix
+        return SpecGuard::Client::PathRoot.rebase(path, root: root, prefix: prefix) unless prefix.empty?
+        return path unless path.start_with?("#{root}/")
+
+        path.delete_prefix("#{root}/")
+      end
+
+      # The cwd-relative spelling: what the annotation lookup reads against
+      # the read root.
+      def read_relative_path(path)
         root = self.class.repo_root
         return path unless path.start_with?("#{root}/")
 
