@@ -49,6 +49,7 @@ require_relative "../rspec"
 require_relative "../client/configuration"
 require_relative "../client/transport"
 require_relative "../client/delivery_warning"
+require_relative "../client/path_root"
 # Brings the linter's discovery chain with it (Scanner, Finding, Schema). That
 # direction is safe — `specguard/rspec` does not require `rspec/core`, so the
 # linter stays loadable without RSpec; it is only the reverse that would break
@@ -289,6 +290,25 @@ module SpecGuard
       def repo_root
         @repo_root ||= Dir.pwd
       end
+
+      # The directory every shipped row path is relative to (SPGD-2109): the
+      # git toplevel of {repo_root}, or {repo_root} itself outside a
+      # repository. Derived from the ONE bound {repo_root} and probed once
+      # per binding — the same one-binding discipline, so a run started from
+      # a monorepo package subdirectory ships `gems/a/spec/x_spec.rb` rather
+      # than a name every sibling package shares. {repo_root} stays the
+      # READ root (the annotation lookup resolves spec source against it);
+      # the two are deliberately not one value.
+      def path_root
+        bound = repo_root
+        @path_root_binding = nil unless @path_root_binding&.first == bound
+        (@path_root_binding ||= [bound, SpecGuard::Client::PathRoot.resolve(bound)]).last
+      end
+
+      # {repo_root} relative to {path_root}; empty when they coincide.
+      def path_prefix
+        SpecGuard::Client::PathRoot.prefix(repo_root, path_root)
+      end
     end
 
     # @param output [IO] the stream RSpec hands every formatter. This class's
@@ -354,6 +374,9 @@ module SpecGuard
       # is left alone: its memoization is correct for what it does, and
       # overwriting a bound value would second-guess it.
       root = self.class.repo_root
+      # Probed here too, at the same moment, so the git call happens once at
+      # construction and never mid-run (SPGD-2109).
+      self.class.path_root
       ::RSpec::Core::Metadata.relative_path_regex
       @error_stream = error_stream
       @annotations = annotations || SpecGuard::Client::AnnotationLookup.new(root: root)
@@ -1112,6 +1135,11 @@ module SpecGuard
     def capture(example)
       metadata = example.metadata || {}
       result = example.execution_result
+      # `read_path` is rspec-core's cwd-relative spelling — what the
+      # annotation lookup resolves against the read root. `file_path` is the
+      # same file as shipped: relative to the path root (SPGD-2109). They are
+      # equal unless the run started below the git toplevel.
+      read_path = read_relative_path(metadata[:file_path])
       file_path = relative_path(metadata[:file_path])
       line_number = metadata[:line_number]
 
@@ -1121,7 +1149,7 @@ module SpecGuard
       # the intent of the examples in it and not the examples themselves. It
       # also routes through {#warn_once}, so the operator hears about it exactly
       # once however many examples are affected.
-      intent = never_fail_the_run { @annotations.intent_for(file: file_path, line: line_number) }
+      intent = never_fail_the_run { @annotations.intent_for(file: read_path, line: line_number) }
 
       {
         # Not wrapped in `never_fail_the_run`, unlike the annotation lookup
@@ -1129,7 +1157,7 @@ module SpecGuard
         # memoized string interpolation over a Hash RSpec has already built, and
         # a guard here could only ever add a way to emit an identity-less row
         # silently. The outer guard at `#example_finished` still covers it.
-        "id" => example.id,
+        "id" => shipped_id(example, metadata),
         # `|| file_path` rather than a bare read: RSpec defaults
         # `:rerun_file_path` for every example it builds, so the fallback is
         # unreachable in a real run — but if a producer ever hands us metadata
@@ -1159,13 +1187,39 @@ module SpecGuard
     # definition of "relative to the project root" rather than inventing a
     # second one, then drop the `./` so the value matches what a linter, a
     # `git diff --name-only` and the platform all use as a file's identity.
+    #
+    # When the run started below the git toplevel (a monorepo package),
+    # "relative to the project root" means the toplevel, not the cwd: the cwd
+    # spelling is re-expressed against it (SPGD-2109).
     def relative_path(path)
+      read = read_relative_path(path)
+      return read if read.nil?
+
+      SpecGuard::Client::PathRoot.rebase(read, root: self.class.path_root, prefix: self.class.path_prefix)
+    end
+
+    # rspec-core's own cwd-relative spelling, `./` dropped.
+    def read_relative_path(path)
       return nil if path.nil?
 
       string = path.to_s
       return nil if string.empty?
 
       (::RSpec::Core::Metadata.relative_path(string) || string).sub(%r{\A\./}, "")
+    end
+
+    # RSpec's example id is `"#{rerun_file_path}[#{scoped_id}]"`, with the
+    # rerun path cwd-relative. Below the git toplevel the path half is rebased
+    # onto the path root like every other shipped path; at the toplevel (or
+    # outside a repository) the id is RSpec's own, untouched.
+    def shipped_id(example, metadata)
+      id = example.id
+      return id if self.class.path_prefix.empty?
+
+      rerun = metadata[:rerun_file_path].to_s
+      return id if rerun.empty? || !id.to_s.start_with?(rerun)
+
+      "#{relative_path(rerun)}#{id[rerun.length..]}"
     end
 
     # Appends one line to the replay queue. Opened in append mode and written

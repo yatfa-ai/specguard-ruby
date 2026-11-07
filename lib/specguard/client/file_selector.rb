@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "open3"
+require_relative "path_root"
 
 module SpecGuard
   module Client
@@ -401,8 +402,8 @@ module SpecGuard
       # Empty when git cannot say, in which case the caller falls back to `root`
       # (the top level *is* root for the common case of running from there).
       def toplevel(root)
-        out, ok = git(%w[rev-parse --show-toplevel], root)
-        ok ? real_path(out.strip) : ""
+        # The one probe the reporters' path root shares (SPGD-2109).
+        PathRoot.toplevel(root) || ""
       end
 
       # The merge base of HEAD with the default branch.
