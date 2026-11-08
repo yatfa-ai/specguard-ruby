@@ -13,8 +13,10 @@ module SpecGuard
     # wording change cannot reach one client and miss the other.
     #
     # What stays in each client: the prefix, the warning budget (`@warned`),
-    # and the `append` that decides whether `error` is nil. Those differ by
-    # design; only the clause text is shared.
+    # and what it does with the answer of the shared write ({SinkWriter}) —
+    # whether `error` is nil, and which sentence that earns. The write itself
+    # no longer differs between the clients; what each does with its answer
+    # does, by design. Only the clause text is shared here.
     module DeliveryWarning
       module_function
 

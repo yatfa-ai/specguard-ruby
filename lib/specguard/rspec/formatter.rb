@@ -37,8 +37,6 @@
 # directions.
 require "rspec/core"
 require "rspec/core/formatters/base_formatter"
-require "json"
-require "fileutils"
 
 # `specguard/rspec` is what defines `SpecGuard::RSpec` — the namespace whose
 # existence is the shadowing hazard documented below, and the home of the
@@ -49,6 +47,7 @@ require_relative "../rspec"
 require_relative "../client/configuration"
 require_relative "../client/transport"
 require_relative "../client/delivery_warning"
+require_relative "../client/sink_writer"
 require_relative "../client/path_root"
 require_relative "../client/root_binding"
 # Brings the linter's discovery chain with it (Scanner, Finding, Schema). That
@@ -742,12 +741,14 @@ module SpecGuard
     # Called from inside {#never_fail_the_run}, so a raise below it cannot
     # fail the run — but neither arm leaves its failure to that generic
     # envelope, because each spends the run's one warning on a line that has
-    # to say what actually happened. {#append} catches the sink's failure
-    # modes itself and hands the outcome back, so the one line {#fall_back} is
-    # spending can report whether the queue took the run rather than promise
-    # it (SPGD-1413); the keyless {#append_local} does the same and names the
-    # configured sink path in the line it emits, the way the Minitest twin
-    # does (SPGD-1400). Nothing raises out of either way.
+    # to say what actually happened. {#append} hands the sink's outcome back
+    # as a value — the write and its rescue live in {Client::SinkWriter},
+    # shared with the Minitest reporter (SPGD-2124) — so the one line
+    # {#fall_back} is spending can report whether the queue took the run
+    # rather than promise it (SPGD-1413); the keyless {#append_local} does
+    # the same and names the configured sink path in the line it emits, the
+    # way the Minitest twin does (SPGD-1400). Nothing raises out of either
+    # way.
     #
     # == Why a failure writes the file rather than shrugging
     #
@@ -866,7 +867,7 @@ module SpecGuard
     # whose accessors are `commit_sha`, `branch`, `run_id`, `shard_id`,
     # `output_path`, `endpoint`, `api_key` and `timeout`, and which has no
     # `dry_run?`. Note that four methods here — {#payload}, {#deliver},
-    # {#append} and {#warn_delivery_failure} — legitimately call
+    # {#fall_back} and {#append_local} — legitimately call
     # `SpecGuard::RSpec.configuration` for this gem's own settings, so both
     # spellings appear in this file and mean different things.
     #
@@ -1188,26 +1189,15 @@ module SpecGuard
       "#{relative_path(rerun)}#{id[rerun.length..]}"
     end
 
-    # Appends one line to the replay queue. Opened in append mode and written
-    # with a single call so that two suites sharing an output path (parallel CI
-    # shards, say) interleave whole runs rather than halves of one.
-    #
-    # `path` is passed in rather than read here, so the line {#fall_back}
-    # composes and the file it describes are provably the same string — a
-    # second read of a process-wide singleton could answer differently and name
-    # a path nothing was written to.
-    #
-    # Returns the exception the write died of, or `nil` when it landed — the
-    # fall-back's one line is composed from that answer (see {#fall_back}), and
-    # a raise here could not be, because `close`'s {#never_fail_the_run} would
-    # only reach a warning budget the delivery message has already spent.
-    # `Interrupt` is deliberately outside the clause, as everywhere else in this
-    # file: Ctrl-C must stay Ctrl-C.
+    # Appends one line to the replay queue — a one-line delegation to
+    # {Client::SinkWriter.append}, the write both clients share (the
+    # formatter carried a hand-copy of it until SPGD-2124, and the Minitest
+    # reporter carried the second one). The return contract — the exception
+    # as a value, `nil` on success, `Interrupt` outside the clause — lives on
+    # the module now; what stays here is what this client does with the
+    # answer, folding it into the fall-back's one line (see {#fall_back}).
     def append(data, path)
-      append_to(data, path)
-      nil
-    rescue ScriptError, StandardError => e
-      e
+      Client::SinkWriter.append(data, path)
     end
 
     # The keyless branch's sink: `local_output_path`, a local development
@@ -1216,14 +1206,14 @@ module SpecGuard
     # failed deliveries. See {Configuration#local_output_path}.
     #
     # Its failure is its own line rather than {#never_fail_the_run}'s generic
-    # substitute: the path is knowable here — read once into a local, for the
-    # same reason {#append} takes one — and the Minitest twin names it on the
-    # same input (SPGD-1400), as does this file's delivery arm through
-    # {#sink_clause} (SPGD-1413). The write goes through {#append} so the
-    # exception comes back as a value to compose the line from; left to raise,
-    # it would fall through to {#never_fail_the_run} and spend the run's one
-    # warning on the one sentence this exists to replace. `Interrupt` stays
-    # outside, as everywhere else in this file.
+    # substitute: the path is knowable here — read once into a local, so the
+    # line names exactly the file the write attempted — and the Minitest twin
+    # names it on the same input (SPGD-1400), as does this file's delivery arm
+    # through {#sink_clause} (SPGD-1413). The write goes through {#append} so
+    # the exception comes back as a value to compose the line from; left to
+    # raise, it would fall through to {#never_fail_the_run} and spend the
+    # run's one warning on the one sentence this exists to replace.
+    # `Interrupt` stays outside, as everywhere else in this file.
     def append_local(data)
       path = SpecGuard::RSpec.configuration.local_output_path
       error = append(data, path)
@@ -1231,13 +1221,6 @@ module SpecGuard
 
       emit_warning("SpecGuard: could not write telemetry to #{path} " \
                    "(#{error.class}: #{error.message}). The test run is unaffected.")
-    end
-
-    def append_to(data, path)
-      directory = File.dirname(path)
-      FileUtils.mkdir_p(directory) unless directory == "." || File.directory?(directory)
-
-      File.open(path, "a") { |file| file.write("#{JSON.generate(data)}\n") }
     end
 
     # `Errno::*` and `IOError` — the sink's failure modes — are both
