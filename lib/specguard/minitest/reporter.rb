@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require "json"
-require "fileutils"
-
 # Configuration and Transport are the framework-free halves of the client
 # (env resolution, wire delivery, the never-raise contract), under
 # `SpecGuard::Client`. Required here rather than assumed because nothing else
@@ -10,6 +7,7 @@ require "fileutils"
 require_relative "../client"
 require_relative "../client/configuration"
 require_relative "../client/delivery_warning"
+require_relative "../client/sink_writer"
 
 # The annotation lookup is the third framework-free half: what counts as a
 # test's annotation is a property of the source line, not of the framework
@@ -350,21 +348,20 @@ module SpecGuard
       # One JSON run per line, to whichever file this delivery's outcome
       # warrants (see `#deliver` for which and why).
       #
-      # Returns the exception the write died of, or `nil` when it landed,
-      # rather than warning itself. Both call sites need the outcome *in* their
-      # own sentence — the keyless branch has no preceding line and says so
+      # A one-line delegation to {SpecGuard::Client::SinkWriter.append}, the
+      # write both clients share (this reporter carried a hand-copy of it, and
+      # the RSpec formatter the second, until SPGD-2124). It returns the
+      # exception the write died of, or `nil` when it landed, rather than
+      # warning itself. Both call sites need the outcome *in* their own
+      # sentence — the keyless branch has no preceding line and says so
       # directly, the fall-back folds it into the delivery line it is already
       # spending the run's one warning on — and a warning here would reach
       # `warn_once` first on the fall-back path and spend that budget on the
       # generic write message, losing the HTTP status the operator needs
-      # (SPGD-1413). `Interrupt` stays outside the clause, as everywhere else
-      # in this class.
+      # (SPGD-1413). `Interrupt` stays outside the writer's clause, as
+      # everywhere else in this class.
       def append(data, path)
-        FileUtils.mkdir_p(File.dirname(path))
-        File.open(path, "a") { |f| f.puts(JSON.generate(data)) }
-        nil
-      rescue ScriptError, StandardError => e
-        e
+        SpecGuard::Client::SinkWriter.append(data, path)
       end
 
       # The keyless branch's write, and its own warning. Nothing preceded it on
