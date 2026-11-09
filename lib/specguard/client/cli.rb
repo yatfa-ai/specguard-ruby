@@ -130,8 +130,9 @@ module SpecGuard
       # another comment-form `@intent:` line so the one-line lookback never
       # claims it, separated from its example by one blank/comment line,
       # shadowed by its example's own trailing `@intent:`, or trailing on
-      # an example-group line no example's extraction can reach — a dead
-      # contract in every case, and still a failure). The only code produced by
+      # an example-group line no example's extraction can reach, or
+      # directly above such a line or a shared-example invocation (SPGD-2137)
+      # — a dead contract in every case, and still a failure). The only code produced by
       # inspecting content, and the only path that reaches it is a failed
       # {Linter::Result}.
       EXIT_MALFORMED = 1

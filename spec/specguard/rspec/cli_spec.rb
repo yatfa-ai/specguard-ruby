@@ -646,6 +646,63 @@ RSpec.describe SpecGuard::Client::CLI do
     end
   end
 
+  # SPGD-2137: a comment-form `@intent:` directly above a group line or a
+  # shared-example invocation is discarded at extraction (annotations attach
+  # to examples), yet used to count as a clean annotation and exit 0.
+  describe "unreachable comment-form @intent: annotations above a group" do
+    def write_spec(dir, body, name: "order_spec.rb")
+      path = File.join(dir, name)
+      File.write(path, body)
+      path
+    end
+
+    # @intent: { entity: "CLI report", action: "flag annotations above groups", behavior: "a schema-valid comment annotation above a describe, context, shared_examples header or shared-example invocation exits one with one unreachable finding per dead annotation", layer: "unit" }
+    it "exits 1 with one unreachable finding per dead annotation" do
+      Dir.mktmpdir do |dir|
+        path = write_spec(dir, <<~RUBY)
+          # @intent: { entity: "Cart", action: "checkout", behavior: "totals the items", layer: "unit" }
+          RSpec.describe "Cart" do
+            # @intent: { entity: "Cart", action: "checkout", behavior: "pays for the items", layer: "unit" }
+            it_behaves_like "pays"
+            # @intent: { entity: "Cart", action: "checkout", behavior: "pays for the items", layer: "unit" }
+            include_examples "pays"
+            # @intent: { entity: "Cart", action: "checkout", behavior: "totals the items", layer: "unit" }
+            context "inner" do
+              it("works") { expect(1).to eq(1) }
+            end
+          end
+          # @intent: { entity: "Cart", action: "checkout", behavior: "settles the items", layer: "unit" }
+          RSpec.shared_examples "settles" do
+            it("settles") { expect(1).to eq(1) }
+          end
+        RUBY
+
+        expect(cli.run(["--json", path])).to eq(1)
+
+        failed = JSON.parse(out)["findings"].reject { |f| f["ok"] }
+        expect(failed.map { |f| f["kind"] }.uniq).to eq(["unreachable"])
+        expect(failed.map { |f| f["line"] }).to eq([1, 3, 5, 7, 12])
+      end
+    end
+
+    # @intent: { entity: "CLI report", action: "spare claimed forms", behavior: "the same annotation above a plain it and the one-liner group form exit zero with no failure", layer: "unit" }
+    it "exits 0 for the same payload above a plain it and for the one-liner group form" do
+      Dir.mktmpdir do |dir|
+        path = write_spec(dir, <<~RUBY)
+          describe "x" do
+            # @intent: { entity: "Cart", action: "checkout", behavior: "totals the items", layer: "unit" }
+            it("y") { expect(1).to eq(1) }
+          end
+          # @intent: { entity: "Cart", action: "checkout", behavior: "totals the items", layer: "unit" }
+          describe "z" do it("w") { expect(1).to eq(1) } end
+        RUBY
+
+        expect(cli.run([path])).to eq(0)
+        expect(out).not_to include("FAIL")
+      end
+    end
+  end
+
   # SPGD-1510: the group-line structural pass. An `@intent:` trailing on an
   # example-group line (`describe`/`context`/…) is claimed by no extraction
   # rule — a group line is no example's own and is not comment-only — so the
