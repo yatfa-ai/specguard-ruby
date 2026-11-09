@@ -315,6 +315,15 @@ RSpec.describe SpecGuard::Client::FileSelector do
 
         expect(described_class.select(root: root).files).to eq(["spec/support/binary.rb"])
       end
+
+      # @intent: { entity: "FileSelector", action: "select support files", behavior: "a support-glob match that cannot be read as a file, a directory or a dangling symlink, is left out instead of aborting the walk", layer: "unit" }
+      it "skips an unreadable support-glob match rather than aborting the walk" do
+        write(root, "spec/support/shared.rb", annotated)
+        FileUtils.mkdir_p(File.join(root, "spec/support/odd.rb"))
+        File.symlink("/nonexistent/target", File.join(root, "spec/support/dangling.rb"))
+
+        expect(described_class.select(root: root).files).to eq(["spec/support/shared.rb"])
+      end
     end
   end
 
@@ -1138,6 +1147,51 @@ RSpec.describe SpecGuard::Client::FileSelector do
 
         expect(selection.files).to eq(["spec/support/shared.rb"])
         expect(selection.stats.outside_root).to eq(1)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "a changed token-carrying non-Ruby file in a support directory is not selected and does not count as a spec match", layer: "unit" }
+      it "leaves a changed non-Ruby file in a support directory out" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "spec/support/fixtures/notes.json", annotated)
+        write(root, "spec/support/data.yml", annotated)
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to be_empty
+        expect(selection.stats.spec_matches).to eq(0)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "a changed token-carrying Ruby file in a support directory outside spec/ and test/ is not selected", layer: "unit" }
+      it "leaves a changed support file outside spec/ and test/ out" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "lib/support/thing.rb", annotated)
+        write(root, "app/support/x.rb", annotated)
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to be_empty
+        expect(selection.stats.spec_matches).to eq(0)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "a changed token-carrying Ruby file is a support file only under a directory named exactly support, not one that merely contains the word", layer: "unit" }
+      it "leaves a changed file under a directory merely containing the word support out" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "spec/supporting/x.rb", annotated)
+        write(root, "spec/support_files/y.rb", annotated)
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to be_empty
+        expect(selection.stats.spec_matches).to eq(0)
       end
     end
   end
