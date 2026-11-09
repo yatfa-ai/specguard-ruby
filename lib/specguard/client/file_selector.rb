@@ -17,20 +17,22 @@ module SpecGuard
     # diff names paths, not directories, and a changed test file is a test
     # file wherever the author put it.
     #
-    # == Support files join when they carry the token
+    # == Token-carrying Ruby files under `spec/` and `test/` join
     #
-    # Shared-example and helper files (`spec/**/support/**/*.rb`,
-    # `test/**/support/**/*.rb`) match neither naming convention, yet they are
-    # where an `@intent:` annotation does the most work — one annotation on a
-    # `shared_examples` group covers every including file's rows — and a
-    # malformed one there used to lint green because the linter never opened
-    # the file. Both modes therefore also select a support file, but ONLY one
-    # that contains the `@intent:` token ({carries_intent_token?}): support
-    # directories are full of unannotated helpers, and selecting them all
-    # would flood the "N of M checked files carry no @intent" note and change
-    # the counts of every repository that has a `support/` directory. A
-    # support file with the token but no valid annotation is selected on
-    # purpose — that is the malformed case the gate exists to catch.
+    # Shared-example and helper files (`spec/shared_examples/`, `spec/shared/`,
+    # `spec/support/`, `test/shared/`, `test/support/`, a bare `spec/helpers.rb`
+    # — any `.rb` under a top-level `spec/` or `test/`) match neither naming
+    # convention, yet they are where an `@intent:` annotation does the most
+    # work — one annotation on a `shared_examples` group covers every including
+    # file's rows — and a malformed one there used to lint green because the
+    # linter never opened the file. Both modes therefore also select such a
+    # file, but ONLY one that contains the `@intent:` token
+    # ({carries_intent_token?}): these directories are full of unannotated
+    # helpers, and selecting them all would flood the "N of M checked files
+    # carry no @intent" note and change the counts of every repository that
+    # keeps plain helpers there. A file with the token but no valid annotation
+    # is selected on purpose — that is the malformed case the gate exists to
+    # catch.
     #
     # Both modes carry a fixed directory fence ({SKIPPED_DIRECTORIES}):
     # dependency, build-output, scratch and VCS directories are never
@@ -201,20 +203,19 @@ module SpecGuard
       # in the one mode that answers "what did this branch touch".
       CHANGED_PATTERNS = ["*_spec.rb", "*_test.rb"].freeze
 
-      # The support-file globs of the default walk, scoped to the two
-      # directories the frameworks own for the same reason {DEFAULT_GLOB}
-      # scopes `*_test.rb` to `test/`. A support file is selected only when
-      # it passes {carries_intent_token?}.
-      SUPPORT_GLOB = ["spec/**/support/**/*.rb", "test/**/support/**/*.rb"].freeze
+      # The globs of the default walk's token-carrying files: any Ruby file
+      # under the two directories the frameworks own, for the same reason
+      # {DEFAULT_GLOB} scopes `*_test.rb` to `test/`. A file matched here
+      # (whatever its name or depth, `spec/helpers.rb` included) is selected
+      # only when it passes {carries_intent_token?}.
+      SUPPORT_GLOB = ["spec/**/*.rb", "test/**/*.rb"].freeze
 
-      # The directory that marks a file as support material, and the two
-      # top-level directories it is recognized under (the `--changed`
-      # counterpart of {SUPPORT_GLOB}: git hands back paths, so the same
-      # shape is decided on segments).
-      SUPPORT_DIRECTORY = "support"
+      # The two top-level directories a token-carrying Ruby file is recognized
+      # under (the `--changed` counterpart of {SUPPORT_GLOB}: git hands back
+      # paths, so the same shape is decided on the first segment).
       SUPPORT_ROOTS = %w[spec test].freeze
 
-      # The literal a support file must contain to be selected. A plain
+      # The literal a token-carrying file must contain to be selected. A plain
       # substring, not a parse: the gate only decides whether the linter
       # should open the file, and the validator decides what the token means.
       INTENT_TOKEN = "@intent:"
@@ -311,16 +312,16 @@ module SpecGuard
       end
 
       # Whether a root-relative (or repository-relative) path is a Ruby file
-      # inside a `support` directory under `spec/` or `test/` — the shape
-      # {SUPPORT_GLOB} walks. Decided on whole directory segments, and the
-      # basename is excluded from them: `spec/support.rb` is not a support
-      # directory's content.
+      # under a top-level `spec/` or `test/` directory — the shape
+      # {SUPPORT_GLOB} walks, at any depth, including directly at the root
+      # (`spec/spec_helper.rb`). Decided on the first path segment, and the
+      # basename is excluded from it: a lone `spec.rb` is not under `spec/`.
       def support_path?(path)
         segments = path.split(File::SEPARATOR)
         basename = segments.pop.to_s
         return false unless basename.end_with?(".rb")
 
-        SUPPORT_ROOTS.include?(segments.first) && segments.drop(1).include?(SUPPORT_DIRECTORY)
+        SUPPORT_ROOTS.include?(segments.first)
       end
 
       # Whether the file at `absolute` contains {INTENT_TOKEN}. Read as bytes,
@@ -376,10 +377,10 @@ module SpecGuard
         prefix = directory_prefix(top.empty? ? root : top)
         root_prefix = directory_prefix(real_path(root))
 
-        # A changed file is a spec match by its suffix alone, or — for a Ruby
-        # file in a `support` directory — by carrying the `@intent:` token
-        # (see "Support files join when they carry the token"). Support
-        # candidates that fail the gate are not spec files at all, so they
+        # A changed file is a spec match by its suffix alone, or — for any Ruby
+        # file under `spec/` or `test/` — by carrying the `@intent:` token
+        # (see "Token-carrying Ruby files under `spec/` and `test/` join").
+        # Such candidates that fail the gate are not spec files at all, so they
         # count nowhere (not in `spec_matches`, not in `unreadable`): the
         # empty-reason ladder keeps meaning "a spec file changed".
         specs = names.select { |(name, _)|
@@ -421,8 +422,8 @@ module SpecGuard
          skipped]
       end
 
-      # The support-file arm of the `--changed` match: a Ruby file in a
-      # `support` directory that carries {INTENT_TOKEN}. The directory shape
+      # The token-carrying arm of the `--changed` match: a Ruby file under
+      # `spec/` or `test/` that carries {INTENT_TOKEN}. The directory shape
       # is judged on the root-relative path, matching the default walk; a path
       # outside `root` has no such path, so it is judged on git's own
       # repository-relative name (it is only ever counted as outside, never
