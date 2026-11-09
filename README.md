@@ -59,7 +59,7 @@ See [Shipping the run to SpecGuard](#shipping-the-run-to-specguard) for the sett
 
 ## The linter — `specguard-lint`
 
-Validates `# @intent:` annotations in changed (or all) `*_spec.rb` / `*_test.rb` files — and the `spec/**/support/**/*.rb` / `test/**/support/**/*.rb` shared-example and helper files that carry an `@intent:` token — against the OpenTestIntent
+Validates `# @intent:` annotations in changed (or all) `*_spec.rb` / `*_test.rb` files — and any other `.rb` file under `spec/` or `test/` (shared examples, helpers) that carries an `@intent:` token — against the OpenTestIntent
 JSON Schema. Exits `1` on a malformed annotation — or a well-formed but unreachable one (stacked
 above another comment-form `@intent:` line, so the one-line lookback never claims it; separated
 from its example (`it`, `specify`, `xit`, `fit`, `example`, …) by one blank or ordinary comment line, which puts it out of the lookback's reach;
@@ -69,7 +69,7 @@ comment is shadowed; trailing on a `describe`/`context` group line, which no exa
 
 ```bash
 bundle exec specguard-lint --changed   # CI mode: only files in the current diff
-bundle exec specguard-lint             # one-off audit: every *_spec.rb / *_test.rb (plus support files carrying @intent:) outside dependency/build directories
+bundle exec specguard-lint             # one-off audit: every *_spec.rb / *_test.rb (plus any other .rb under spec/ or test/ carrying @intent:) outside dependency/build directories
 ```
 
 The default walk is fenced out of dependency and build directories — `node_modules`,
@@ -82,15 +82,16 @@ zero-annotation coverage note counts only files you wrote — the same material
 `checked N spec/test files` line says how many (`skipping M in dependency or build
 directories`); a file named explicitly on the command line is always checked.
 
-Shared-example and helper files under `spec/**/support/` and `test/**/support/` match neither
-`*_spec.rb` nor `*_test.rb`, yet annotating the `it` inside a `shared_examples` group is the highest-leverage place to
+Shared-example and helper files — `spec/support/`, `spec/shared_examples/`, `spec/shared/`,
+`spec/helpers/`, `test/shared/`, a bare `spec/spec_helper.rb`, any `.rb` under a top-level `spec/` or
+`test/` — match neither `*_spec.rb` nor `*_test.rb`, yet annotating the `it` inside a `shared_examples` group is the highest-leverage place to
 write an `@intent:` (one annotation covers every including file's rows; a comment above the
 `shared_examples` header or an `it_behaves_like` line is unreachable and fails the lint), so both the default walk and
-`--changed` also select a `.rb` file in a `support` directory — but **only when it contains the
-`@intent:` token**. Support directories are full of unannotated helpers; those stay unselected, so they
+`--changed` also select such a `.rb` file — but **only when it contains the
+`@intent:` token**. These directories are full of unannotated helpers; those stay unselected, so they
 neither flood the `N of M checked spec/test files carry no @intent` note nor change any count for a
-repository whose support files carry no annotations. The same dependency/build fence applies, and in
-`--changed` a token-carrying support file counts in the `changed spec/test files` figure like any other.
+repository whose helper files carry no annotations. The same dependency/build fence applies, and in
+`--changed` a token-carrying file counts in the `changed spec/test files` figure like any other.
 
 `--changed` is the CI selection mode: it diffs against the **merge base with
 the default branch** (`origin/HEAD`, then `origin/main`/`origin/master`, then
