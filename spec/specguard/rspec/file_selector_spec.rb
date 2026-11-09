@@ -4,6 +4,10 @@ require "tmpdir"
 require "open3"
 
 RSpec.describe SpecGuard::Client::FileSelector do
+  # The token, spelled so this file never carries a literal annotation-shaped
+  # string of its own: the scanner reads fixture text like any other source.
+  let(:intent_mark) { "@intent" + ":" }
+
   # Real git repositories, not a stubbed `git`. The whole point of this class is
   # what git actually does on a clean checkout, which a stub would simply
   # re-assert rather than test.
@@ -244,6 +248,73 @@ RSpec.describe SpecGuard::Client::FileSelector do
 
       expect(selection.files).to eq(["spec/models/order_spec.rb"])
       expect(selection.skipped).to eq(0)
+    end
+
+    # Shared-example and helper files match neither naming convention, so the
+    # walk used to never open them and a malformed annotation there linted
+    # green. A support file joins only when it carries the intent token:
+    # support directories are full of unannotated helpers.
+    describe "support files" do
+      let(:annotated) { %(# #{intent_mark} { entity: "R", action: "p", behavior: "a behavior long enough" }\nit "x" do; end\n) }
+
+      # @intent: { entity: "FileSelector", action: "select support files", behavior: "the default walk selects a spec or test support file that carries an @intent token", layer: "unit" }
+      it "selects a support file that carries an intent token" do
+        write(root, "spec/support/shared_examples/orders.rb", annotated)
+        write(root, "test/support/shared.rb", annotated)
+        write(root, "spec/order_spec.rb")
+
+        expect(described_class.select(root: root).files)
+          .to eq(["spec/order_spec.rb", "spec/support/shared_examples/orders.rb", "test/support/shared.rb"])
+      end
+
+      # @intent: { entity: "FileSelector", action: "select support files", behavior: "a support file without an @intent token is not selected, so counts for repositories with plain helpers are unchanged", layer: "unit" }
+      it "leaves a support file with no intent token out of the selection" do
+        write(root, "spec/support/helper.rb", "module Helper; end\n")
+        write(root, "spec/order_spec.rb")
+
+        selection = described_class.select(root: root)
+
+        expect(selection.files).to eq(["spec/order_spec.rb"])
+        expect(selection.skipped).to eq(0)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select support files", behavior: "a token-carrying file outside a spec or test support directory is not adopted by the walk", layer: "unit" }
+      it "does not adopt token-carrying files outside spec/ or test/ support directories" do
+        write(root, "lib/support/thing.rb", annotated)
+        write(root, "spec/support.rb", annotated)
+        write(root, "spec/helpers/thing.rb", annotated)
+        write(root, "spec/support/notes.txt", annotated)
+
+        expect(described_class.select(root: root)).to be_empty
+      end
+
+      # @intent: { entity: "FileSelector", action: "select support files", behavior: "a support file that is also named like a spec is selected once", layer: "unit" }
+      it "lists a support file that already matches *_spec.rb only once" do
+        write(root, "spec/support/shared_spec.rb", annotated)
+
+        expect(described_class.select(root: root).files).to eq(["spec/support/shared_spec.rb"])
+      end
+
+      # @intent: { entity: "FileSelector", action: "select support files", behavior: "a token-carrying support file under a fenced directory is excluded and counted as skipped", layer: "unit" }
+      it "still fences a token-carrying support file under vendor/ and counts it as skipped" do
+        write(root, "spec/support/shared.rb", annotated)
+        write(root, "spec/vendor/support/vendored.rb", annotated)
+        write(root, "spec/support/vendor/vendored_too.rb", annotated)
+        write(root, "spec/vendor/support/plain.rb", "module Plain; end\n")
+
+        selection = described_class.select(root: root)
+
+        expect(selection.files).to eq(["spec/support/shared.rb"])
+        expect(selection.skipped).to eq(2)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select support files", behavior: "a support file that is not valid text is gated on its bytes and never raises", layer: "unit" }
+      it "reads the token from bytes, so a non-UTF-8 support file neither raises nor hides its token" do
+        write(root, "spec/support/binary.rb", "\xC3\x28 # #{intent_mark} {}\n".b)
+        write(root, "spec/support/binary_plain.rb", "\xC3\x28\n".b)
+
+        expect(described_class.select(root: root).files).to eq(["spec/support/binary.rb"])
+      end
     end
   end
 
@@ -986,6 +1057,87 @@ RSpec.describe SpecGuard::Client::FileSelector do
         }.to raise_error(SpecGuard::Client::UsageError) { |e| messages << e.message }
 
         expect(messages).to eq([%(--changed could not diff against "#{absent}")])
+      end
+    end
+
+    describe "support files" do
+      let(:annotated) { %(# #{intent_mark} { entity: "R", action: "p", behavior: "a behavior long enough" }\nit "x" do; end\n) }
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "a changed support file that carries an @intent token is selected and counted as a spec match", layer: "unit" }
+      it "selects a changed support file carrying an intent token" do
+        init_repo(root)
+        write(root, "spec/support/shared.rb", "module Shared; end\n")
+        write(root, "test/support/shared.rb", "module Shared; end\n")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        File.write(File.join(root, "spec/support/shared.rb"), annotated)
+        File.write(File.join(root, "test/support/shared.rb"), annotated)
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/support/shared.rb", "test/support/shared.rb"])
+        expect(selection.stats.spec_matches).to eq(2)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "a changed support file without an @intent token is not selected and does not count as a spec match", layer: "unit" }
+      it "leaves a changed support file without a token out, counting it nowhere" do
+        init_repo(root)
+        write(root, "spec/support/helper.rb", "module Helper; end\n")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        File.write(File.join(root, "spec/support/helper.rb"), "module Helper; def x; end; end\n")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to be_empty
+        expect(selection.stats.changed).to eq(1)
+        expect(selection.stats.spec_matches).to eq(0)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "an untracked support file carrying an @intent token is selected and attributed to the untracked leg", layer: "unit" }
+      it "picks up an untracked support file carrying a token" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "spec/support/new_shared.rb", annotated)
+        write(root, "spec/support/new_plain.rb", "module Plain; end\n")
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to eq(["spec/support/new_shared.rb"])
+        expect(selection.stats.untracked).to eq(1)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "a changed token-carrying support file under a fenced directory is excluded and counted as skipped", layer: "unit" }
+      it "still fences a changed support file under vendor/" do
+        init_repo(root)
+        write(root, "spec/base_spec.rb")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        write(root, "spec/vendor/support/vendored.rb", annotated)
+
+        selection = described_class.select(changed: true, root: root)
+
+        expect(selection.files).to be_empty
+        expect(selection.skipped).to eq(1)
+        expect(selection.stats.spec_matches).to eq(1)
+      end
+
+      # @intent: { entity: "FileSelector", action: "select changed support files", behavior: "a changed token-carrying support file outside the working directory is counted as outside the root, while one inside it is selected root-relative", layer: "unit" }
+      it "counts a token-carrying support file outside the working directory as outside_root" do
+        init_repo(root)
+        write(root, "spec/support/shared.rb", "module Shared; end\n")
+        write(root, "sub/spec/support/shared.rb", "module Shared; end\n")
+        commit(root, "base")
+        git("checkout", "-q", "-b", "feature", chdir: root)
+        File.write(File.join(root, "spec/support/shared.rb"), annotated)
+        File.write(File.join(root, "sub/spec/support/shared.rb"), annotated)
+
+        selection = described_class.select(changed: true, root: File.join(root, "sub"))
+
+        expect(selection.files).to eq(["spec/support/shared.rb"])
+        expect(selection.stats.outside_root).to eq(1)
       end
     end
   end

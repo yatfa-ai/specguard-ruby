@@ -1058,7 +1058,7 @@ RSpec.describe SpecGuard::Client::ValidatorBackend do
         _, ruby_stderr, = run_json_cli({})
         _, go_stderr, = run_json_cli(go_env)
 
-        expect(stderr_beyond_provenance(go_stderr)).to eq("specguard-lint: checked 2 spec files\n")
+        expect(stderr_beyond_provenance(go_stderr)).to eq("specguard-lint: checked 2 spec/test files\n")
         expect(stderr_beyond_provenance(ruby_stderr)).to eq(stderr_beyond_provenance(go_stderr))
         expect(go_stderr).not_to eq(ruby_stderr)
       end
@@ -2269,7 +2269,7 @@ RSpec.describe SpecGuard::Client::ValidatorBackend do
         Dir.mktmpdir { |dir| Dir.chdir(dir) { _, stderr, = run_cli({ described_class::ENV_VAR => stub }, []) } }
 
         expect(stderr.lines.first).to start_with("specguard-lint: validated by ")
-        expect(stderr).to include("selected 0 spec files")
+        expect(stderr).to include("selected 0 spec/test files")
       end
     end
 

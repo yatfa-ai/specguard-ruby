@@ -263,7 +263,7 @@ module SpecGuard
           # meaning one file — and the client's document carries only FINDINGS,
           # so a clean file in that subtree appears nowhere and "checked N spec
           # files" can never count what was actually validated. The observed
-          # result was a run whose header said `checked 1 spec file`, whose
+          # result was a run whose header said `checked 1 spec/test file`, whose
           # summary said `checked 3 @intent annotations`, and whose
           # zero-annotation note claimed the directory carried none — three
           # mutually contradicting sentences, and at its sharpest an exit-0
@@ -315,7 +315,7 @@ module SpecGuard
       # name files this run actually checked.
       def report_selection(selection, json:)
         if selection.empty?
-          @stderr.puts "specguard-lint: warning: selected 0 spec files — #{empty_reason(selection)}"
+          @stderr.puts "specguard-lint: warning: selected 0 spec/test files — #{empty_reason(selection)}"
           @stderr.puts "specguard-lint: warning: #{selection.note}" if selection.note
         else
           json ? @stderr.puts(selection_line(selection)) : @stdout.puts(selection_line(selection))
@@ -337,7 +337,7 @@ module SpecGuard
       def selection_line(selection)
         untracked = selection.mode == :changed ? selection.stats&.untracked.to_i : 0
         skipped = selection.skipped.to_i
-        "specguard-lint: checked #{selection.count} spec file#{'s' unless selection.count == 1}" \
+        "specguard-lint: checked #{selection.count} spec/test file#{'s' unless selection.count == 1}" \
           "#{" changed since #{selection.base}" if selection.mode == :changed}" \
           "#{" under #{Dir.pwd}" if selection.mode == :all}" \
           "#{" including #{untracked} untracked" if untracked.positive?}" \
@@ -399,7 +399,7 @@ module SpecGuard
       # clauses are additive, and a selection emptied by several causes says
       # so.
       def changed_excluded_reason(stats, base, skipped)
-        matched = "#{stats.spec_matches} changed spec file#{'s' unless stats.spec_matches == 1} against #{base}"
+        matched = "#{stats.spec_matches} changed spec/test file#{'s' unless stats.spec_matches == 1} against #{base}"
 
         if stats.outside_root.positive?
           reason = "#{matched}, but #{stats.outside_root} #{stats.outside_root == 1 ? 'is' : 'are'} " \
@@ -509,7 +509,7 @@ module SpecGuard
 
         verb = bare.length == 1 ? "carries" : "carry"
         @stderr.puts "specguard-lint: note: #{bare.length} of #{selected_files.length} checked " \
-                     "spec file#{'s' unless selected_files.length == 1} #{verb} no @intent " \
+                     "spec/test file#{'s' unless selected_files.length == 1} #{verb} no @intent " \
                      "annotations: #{bare.join(', ')}"
       end
 

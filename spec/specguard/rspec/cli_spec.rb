@@ -45,7 +45,21 @@ RSpec.describe SpecGuard::Client::CLI do
     it "states how many files it checked" do
       cli.run([fixture_path("order_spec.rb")])
 
-      expect(out).to include("checked 1 spec file")
+      expect(out).to include("checked 1 spec/test file")
+    end
+
+    # A support file carrying the token is part of the audit; one without is not.
+    # @intent: { entity: "CLI report", action: "state what was checked", behavior: "a token-carrying support file is counted among the checked files while a plain helper beside it is not", layer: "unit" }
+    it "counts a token-carrying support file and leaves a plain helper out of the checked files" do
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "spec/support"))
+        FileUtils.cp(fixture_path("order_spec.rb"), File.join(dir, "spec/support/shared.rb"))
+        File.write(File.join(dir, "spec/support/helper.rb"), "module Helper; end\n")
+        Dir.chdir(dir) { cli.run([]) }
+
+        expect(out).to include("checked 1 spec/test file under #{dir}")
+        expect(err).not_to include("helper.rb")
+      end
     end
 
     # A recursive fallback (:all) and an explicitly named file (:explicit)
@@ -57,7 +71,7 @@ RSpec.describe SpecGuard::Client::CLI do
       Dir.mktmpdir do |dir|
         FileUtils.cp(fixture_path("order_spec.rb"), dir)
         Dir.chdir(dir) { cli.run([]) }
-        expect(out).to include("checked 1 spec file under #{dir}")
+        expect(out).to include("checked 1 spec/test file under #{dir}")
       end
     end
 
@@ -70,15 +84,15 @@ RSpec.describe SpecGuard::Client::CLI do
         run_in = lambda do |argv|
           c = mk.call
           out_line = nil
-          Dir.chdir(dir) { c.run(argv); out_line = c.instance_variable_get(:@stdout).string[/^specguard-lint: checked 1 spec file.*$/] }
+          Dir.chdir(dir) { c.run(argv); out_line = c.instance_variable_get(:@stdout).string[/^specguard-lint: checked 1 spec\/test file.*$/] }
           out_line
         end
         all_line = run_in.call([])
         explicit_line = run_in.call([File.join(dir, "order_spec.rb")])
 
         expect(all_line).not_to eq(explicit_line)
-        expect(all_line).to eq("specguard-lint: checked 1 spec file under #{dir}")
-        expect(explicit_line).to eq("specguard-lint: checked 1 spec file")
+        expect(all_line).to eq("specguard-lint: checked 1 spec/test file under #{dir}")
+        expect(explicit_line).to eq("specguard-lint: checked 1 spec/test file")
       end
     end
 
@@ -96,7 +110,7 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run([]) }
 
         expect(out).to include(
-          "checked 1 spec file under #{dir} skipping 1 in dependency or build directories"
+          "checked 1 spec/test file under #{dir} skipping 1 in dependency or build directories"
         )
       end
     end
@@ -110,7 +124,7 @@ RSpec.describe SpecGuard::Client::CLI do
         FileUtils.cp(fixture_path("order_spec.rb"), dir)
         Dir.chdir(dir) { cli.run([]) }
 
-        expect(out).to include("checked 1 spec file under #{dir}")
+        expect(out).to include("checked 1 spec/test file under #{dir}")
         expect(out).not_to include("skipping")
       end
     end
@@ -127,7 +141,7 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run([]) }
 
         expect(err).to include(
-          "selected 0 spec files — 1 *_spec.rb or *_test.rb file found, " \
+          "selected 0 spec/test files — 1 *_spec.rb or *_test.rb file found, " \
           "all in dependency or build directories"
         )
       end
@@ -154,7 +168,7 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run(["--changed"]) }
       end
 
-      expect(out).to match(/checked 2 spec files changed since \S+ including 1 untracked/)
+      expect(out).to match(/checked 2 spec\/test files changed since \S+ including 1 untracked/)
     end
 
     # SPGD-1171: the `including N untracked` clause is count-gated
@@ -187,7 +201,7 @@ RSpec.describe SpecGuard::Client::CLI do
       # Byte-exact for the whole sentence: the clause is not merely wrong-but-
       # present, there is no clause at all — the line cannot over-claim.
       line = out.lines.grep(/\Aspecguard-lint: checked .* changed since/).first
-      expect(line).to eq("specguard-lint: checked 1 spec file changed since #{base}\n")
+      expect(line).to eq("specguard-lint: checked 1 spec/test file changed since #{base}\n")
       expect(line).not_to include("untracked")
     end
 
@@ -221,7 +235,7 @@ RSpec.describe SpecGuard::Client::CLI do
 
       line = out.lines.grep(/\Aspecguard-lint: checked .* changed since/).first
       expect(line).to eq(
-        "specguard-lint: checked 1 spec file changed since #{base} " \
+        "specguard-lint: checked 1 spec/test file changed since #{base} " \
         "skipping 1 in dependency or build directories\n"
       )
     end
@@ -252,7 +266,7 @@ RSpec.describe SpecGuard::Client::CLI do
       end
 
       expect(err).to include(
-        "selected 0 spec files — 1 changed spec file against #{base}, " \
+        "selected 0 spec/test files — 1 changed spec/test file against #{base}, " \
         "all in dependency or build directories"
       )
       expect(err).not_to include("nothing changed against")
@@ -278,7 +292,7 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run(["--changed"]) }
       end
 
-      expect(out).to include("checked 1 spec file changed since")
+      expect(out).to include("checked 1 spec/test file changed since")
       expect(err).not_to include("nothing changed against")
     end
 
@@ -288,7 +302,7 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run([]) }
       end
 
-      expect(err).to include("warning", "selected 0 spec files")
+      expect(err).to include("warning", "selected 0 spec/test files")
     end
 
     # @intent: { entity: "CLI report", action: "warn on an empty selection", behavior: "the empty-selection warning stays off stdout so a pipe cannot swallow it", layer: "unit" }
@@ -382,7 +396,7 @@ RSpec.describe SpecGuard::Client::CLI do
 
         expect(code).to eq(described_class::EXIT_OK)
         expect(err).to include(
-          "specguard-lint: note: 1 of 2 checked spec files carries no @intent annotations: #{bare}"
+          "specguard-lint: note: 1 of 2 checked spec/test files carries no @intent annotations: #{bare}"
         )
         expect(err).not_to include(annotated)
       end
@@ -400,7 +414,7 @@ RSpec.describe SpecGuard::Client::CLI do
 
         expect(code).to eq(described_class::EXIT_OK)
         expect(err).to include(
-          "specguard-lint: note: 1 of 2 checked spec files carries no @intent annotations: #{bare}"
+          "specguard-lint: note: 1 of 2 checked spec/test files carries no @intent annotations: #{bare}"
         )
         document = JSON.parse(out)
         expect(document).to include(
@@ -414,14 +428,14 @@ RSpec.describe SpecGuard::Client::CLI do
     # SPGD-1163: the singular arm of the note is the one the landed pins never
     # reach — every assertion above selects two files, so the noun ternary's
     # `file#{'s' unless selected_files.length == 1}` singular form
-    # ("1 of 1 checked spec file carries") had no assertion. The pre-SPGD-1159
+    # ("1 of 1 checked spec/test file carries") had no assertion. The pre-SPGD-1159
     # "states the zero" example drives exactly this invocation (one bare file
     # through `cli.run([path])`) and asserts stdout only, so the singular
     # bytes were machine-observable contract — the specguard-mcp bridge
     # forwards stderr verbatim as `linter_stderr` — pinned nowhere. These two
     # examples pin the form byte-exactly, line end included, in both
     # renderers.
-    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "a single bare file renders the note singular — 1 of 1 checked spec file carries — byte-exactly in human mode", layer: "unit" }
+    # @intent: { entity: "CLI report", action: "name annotation-free files", behavior: "a single bare file renders the note singular — 1 of 1 checked spec/test file carries — byte-exactly in human mode", layer: "unit" }
     it "renders the note singular for a one-file selection in human mode" do
       Dir.mktmpdir do |dir|
         bare = File.join(dir, "bare_spec.rb")
@@ -431,7 +445,7 @@ RSpec.describe SpecGuard::Client::CLI do
 
         expect(code).to eq(described_class::EXIT_OK)
         expect(err).to include(
-          "specguard-lint: note: 1 of 1 checked spec file carries no @intent annotations: #{bare}\n"
+          "specguard-lint: note: 1 of 1 checked spec/test file carries no @intent annotations: #{bare}\n"
         )
       end
     end
@@ -446,7 +460,7 @@ RSpec.describe SpecGuard::Client::CLI do
 
         expect(code).to eq(described_class::EXIT_OK)
         expect(err).to include(
-          "specguard-lint: note: 1 of 1 checked spec file carries no @intent annotations: #{bare}\n"
+          "specguard-lint: note: 1 of 1 checked spec/test file carries no @intent annotations: #{bare}\n"
         )
         document = JSON.parse(out)
         expect(document).to include(
@@ -493,7 +507,7 @@ RSpec.describe SpecGuard::Client::CLI do
 
         expect(code).to eq(described_class::EXIT_MALFORMED)
         expect(err).to include(
-          "specguard-lint: note: 1 of 2 checked spec files carries no @intent annotations: #{bare}"
+          "specguard-lint: note: 1 of 2 checked spec/test files carries no @intent annotations: #{bare}"
         )
         expect(err).not_to include(gone)
         expect(out).to include("FAIL  #{gone} — could not read file")
@@ -1025,7 +1039,7 @@ RSpec.describe SpecGuard::Client::CLI do
         expect(err.lines.length).to eq(2)
         expect(err.lines.first).to start_with("specguard-lint: validated by validate-intent 0.1.4")
         expect(err).to include("(SPECGUARD_VALIDATE_INTENT)")
-        expect(err.lines.last).to eq("specguard-lint: checked 1 spec file\n")
+        expect(err.lines.last).to eq("specguard-lint: checked 1 spec/test file\n")
       end
 
       # SPGD-1134: a json-mode changed run must name its provenance — the base
@@ -1058,7 +1072,7 @@ RSpec.describe SpecGuard::Client::CLI do
           bare_files = ["spec/base_spec.rb", "spec/new_untracked_spec.rb"]
         end
 
-        expect(err).to match(/checked 2 spec files changed since \S+ including 1 untracked/)
+        expect(err).to match(/checked 2 spec\/test files changed since \S+ including 1 untracked/)
         # Exactly one checked-line reaches stderr — the selection sentence
         # itself; the provenance line names no count and no warning fires.
         expect(err.lines.grep(/specguard-lint: checked/).length).to eq(1)
@@ -1068,7 +1082,7 @@ RSpec.describe SpecGuard::Client::CLI do
         # prefix is `specguard-lint: note:`), stdout stays one document, and
         # this turns the interaction into coverage rather than collateral.
         expect(err).to include(
-          "specguard-lint: note: 2 of 2 checked spec files carry no @intent annotations: " \
+          "specguard-lint: note: 2 of 2 checked spec/test files carry no @intent annotations: " \
           "#{bare_files.join(', ')}"
         )
         expect(out).not_to include("checked")
@@ -1102,7 +1116,7 @@ RSpec.describe SpecGuard::Client::CLI do
         end
 
         line = err.lines.grep(/\Aspecguard-lint: checked .* changed since/).first
-        expect(line).to eq("specguard-lint: checked 1 spec file changed since #{base}\n")
+        expect(line).to eq("specguard-lint: checked 1 spec/test file changed since #{base}\n")
         expect(line).not_to include("untracked")
         expect(out).not_to include("checked")
         expect { JSON.parse(out) }.not_to raise_error
@@ -1112,7 +1126,7 @@ RSpec.describe SpecGuard::Client::CLI do
       it "still warns loudly about an empty selection" do
         Dir.mktmpdir { |dir| Dir.chdir(dir) { cli.run(["--json"]) } }
 
-        expect(err).to include("warning", "selected 0 spec files")
+        expect(err).to include("warning", "selected 0 spec/test files")
       end
 
       # A run that selected nothing still owes stdout a document — a consumer
@@ -1278,7 +1292,7 @@ RSpec.describe SpecGuard::Client::CLI do
   # SPGD-1303. The shared `validate-intent` binary learned to expand a bare
   # directory argument as `DIR/**` (oti SPGD-1299), and the client was never
   # told: one argument stopped meaning one file, so `specguard-lint <dir>`
-  # validated a whole subtree behind a header that said `checked 1 spec file`,
+  # validated a whole subtree behind a header that said `checked 1 spec/test file`,
   # a summary that said `checked 3 @intent annotations`, and a zero-annotation
   # note that named the directory as carrying none — three sentences in one
   # document contradicting each other, and at its sharpest a directory holding
@@ -1439,7 +1453,7 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(File.join(dir, "sub")) { cli.run(["--changed"]) }
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
       expect(err).not_to include("none matching *_spec.rb")
       expect(err).to include("outside")
     end
@@ -1450,11 +1464,11 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(File.join(dir, "sub")) { cli.run(["--changed"]) }
       end
 
-      expect(err).to include("1 changed spec file")
+      expect(err).to include("1 changed spec/test file")
     end
 
     # Two filters emptied this selection, and naming only the first is the
-    # exact failure this whole block exists to prevent. "2 changed spec files
+    # exact failure this whole block exists to prevent. "2 changed spec/test files
     # … but 1 is outside" reads as complete arithmetic: 2 matched, 1 excluded,
     # so the reader concludes the remaining one was checked. It was not. The
     # unreadable file is the reason the run linted nothing, and it has to
@@ -1472,14 +1486,14 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(File.join(dir, "sub")) { cli.run(["--changed"]) }
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
       # Asserted as one shape rather than three independent `include`s: the
       # point of this example is that the two clauses appear TOGETHER and in
       # order. Separate matchers stay green if a refactor split them onto
       # their own lines, reversed them, or repeated a count — which is
       # precisely the regression this example exists to catch.
       expect(err).to match(
-        /2 changed spec files against \S+, but 1 is outside \S+ \(--changed selects only files under the current directory\) and 1 could not be read/
+        /2 changed spec\/test files against \S+, but 1 is outside \S+ \(--changed selects only files under the current directory\) and 1 could not be read/
       )
     end
 
@@ -1509,11 +1523,11 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(File.join(dir, "sub")) { cli.run(["--changed"]) }
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
       # One shape, not three `include`s — the same reasoning as the two-cause
       # example above.
       expect(err).to match(
-        /3 changed spec files against \S+, but 1 is outside \S+ \(--changed selects only files under the current directory\) and 1 could not be read and 1 in dependency or build directories/
+        /3 changed spec\/test files against \S+, but 1 is outside \S+ \(--changed selects only files under the current directory\) and 1 could not be read and 1 in dependency or build directories/
       )
     end
 
@@ -1551,9 +1565,9 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run(["--changed"]) }
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
       expect(err).to include(
-        "2 changed spec files against #{base}, but 1 could not be read " \
+        "2 changed spec/test files against #{base}, but 1 could not be read " \
         "and 1 in dependency or build directories"
       )
       # The fall-through lie: without this arm, the solo fence arm answers
@@ -1596,9 +1610,9 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run(["--changed"]) }
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
       expect(err).to include(
-        "5 changed spec files against #{base}, but 2 could not be read " \
+        "5 changed spec/test files against #{base}, but 2 could not be read " \
         "and 3 in dependency or build directories"
       )
     end
@@ -1615,7 +1629,7 @@ RSpec.describe SpecGuard::Client::CLI do
         Dir.chdir(dir) { cli.run([]) }
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
       expect(err).to include("no *_spec.rb or *_test.rb file found under")
       expect(err).not_to include("no *_spec.rb found under")
     end
@@ -1640,7 +1654,7 @@ RSpec.describe SpecGuard::Client::CLI do
         FileUtils.remove_entry(dir) if dir
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
       expect(err).to include("1 file changed against")
       expect(err).to include("none matching *_spec.rb or *_test.rb")
     end
