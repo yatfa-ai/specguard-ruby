@@ -290,8 +290,14 @@ module SpecGuard
       #     example's own annotation before it ever consults the line above),
       #     so the comment is shadowed and its LAST line is dead. (Any earlier
       #     lines of the run are the stacked arm's.)
+      #   * the comment-form run ABOVE a group (SPGD-2137): the run's next
+      #     line is a `describe`/`context`/`shared_examples`/… line or an
+      #     `it_behaves_like`/`include_examples`/… invocation. Extraction is
+      #     example-anchored — it reads only the line directly above an
+      #     EXAMPLE — so no example can claim a run that ends at a group
+      #     line, and every line of it is dead.
       #
-      # All four are reported loudly, not skipped — the same stance
+      # Each of these is reported loudly, not skipped — the same stance
       # {AnnotationScanner} takes for NO_PAYLOAD.
       #
       # A comment-form annotation line is a comment-only line
@@ -336,6 +342,14 @@ module SpecGuard
         "extraction (SPGD-12 §2) is one-line and example-anchored, so no example can ever " \
         "claim it. Move it onto its example's `it` line, or to the comment line directly " \
         "above that `it`"
+
+      UNREACHABLE_ABOVE_GROUP_ANNOTATION =
+        "unreachable annotation: this @intent: sits directly above an example-group line or a " \
+        "shared-example invocation (describe/context/shared_examples/it_behaves_like/...), and " \
+        "annotations attach to examples, never to groups — extraction (SPGD-12 §2) is " \
+        "example-anchored, so it reads only the line directly above an example and this " \
+        "annotation is silently discarded. Move it onto its example's `it` line, or to the " \
+        "comment line directly above that `it` (inside the group)"
 
       UNREACHABLE_SEPARATED_ANNOTATION =
         "unreachable annotation: this @intent: is separated from its example by an " \
@@ -406,14 +420,18 @@ module SpecGuard
       #   {separated_findings_in_text}), one per run whose example carries its own
       #   trailing annotation (see {own_line_shadow_findings_in_text}) plus one
       #   per group line carrying the trailing form (see
-      #   {group_line_findings_in_text}). The four passes are disjoint by
+      #   {group_line_findings_in_text}), plus one per line of a run sitting
+      #   directly above a group line or shared-example invocation (see
+      #   {group_above_findings_in_text}). The passes are disjoint by
       #   construction: the stacked pass flags all but the LAST line of a run
       #   when an example directly follows, the shadow pass flags ONLY that last
       #   line (and only when the example also carries `@intent: {`), the
       #   separated pass needs a blank or comment-only line after the run (one
       #   slot cannot be both that and an example), and the group pass reads
-      #   only lines that are not comment-only — so the merge cannot double-flag
-      #   a line, and the sort restores the file-then-line order
+      #   only lines that are not comment-only, and the above-group pass
+      #   flags comment lines only when a group or invocation line (never an
+      #   example line) directly follows the run — so the merge cannot
+      #   double-flag a line, and the sort restores the file-then-line order
       #   {unreachable_findings} promises.
       def unreachable_findings_in_text(text, file:)
         # A file that is not valid UTF-8 is reported once, loudly, by the
@@ -424,7 +442,8 @@ module SpecGuard
         (stacked_findings_in_text(text, file: file) +
          separated_findings_in_text(text, file: file) +
          own_line_shadow_findings_in_text(text, file: file) +
-         group_line_findings_in_text(text, file: file)).sort_by(&:line)
+         group_line_findings_in_text(text, file: file) +
+         group_above_findings_in_text(text, file: file)).sort_by(&:line)
       end
 
       # @param text [String] source of one file
@@ -600,9 +619,8 @@ module SpecGuard
       # @return [Array<Finding>] one per example-group line carrying an
       #   `@intent:` token, for lines that define no example of their own
       #   ({EXAMPLE_ON_LINE}). Comment-only lines are left to
-      #   {stacked_findings_in_text} and {separated_findings_in_text}: a
-      #   comment above a group is a different shape, deliberately out of
-      #   scope here (SPGD-1510 flags the group line ITSELF).
+      #   {group_above_findings_in_text} and the other comment-run passes:
+      #   this pass flags the group line ITSELF (SPGD-1510).
       def group_line_findings_in_text(text, file:)
         # Same UTF-8 contract as the stacked pass above.
         return [] unless text.valid_encoding?
@@ -624,6 +642,58 @@ module SpecGuard
           Finding.new(file: file, line: idx + 1, problem: UNREACHABLE_GROUP_ANNOTATION,
                       kind: Finding::KIND_UNREACHABLE)
         end
+      end
+
+      # A shared-example invocation line: it includes another file's examples
+      # into this group, defines none of its own, and so — like a group line —
+      # is no example's line for the lookback to anchor on.
+      INVOCATION_LINE =
+        /\A\s*(?:it_behaves_like|it_should_behave_like|include_examples|include_context)\b/
+
+      # @param text [String] source of one file
+      # @param file [String] path to record on each Finding
+      # @return [Array<Finding>] one per comment-form `@intent:` line of a
+      #   maximal run whose following line is an example-group line
+      #   ({GROUP_LINE}) or a shared-example invocation ({INVOCATION_LINE}).
+      #   The lookback reads only the line directly above an EXAMPLE, so the
+      #   whole run is dead — every line is flagged, the last included. A group
+      #   line that also defines an example on the same line
+      #   ({EXAMPLE_ON_LINE}) is that example's own line, so the run above it
+      #   is claimed and is not flagged. The run must end at the group line:
+      #   a blank or comment interleave beforehand is the separated pass's
+      #   window, and it targets examples only.
+      def group_above_findings_in_text(text, file:)
+        # Same UTF-8 contract as the stacked pass above.
+        return [] unless text.valid_encoding?
+
+        lines = text.lines
+        i = 0
+        findings = []
+
+        while i < lines.length
+          unless COMMENT_INTENT_LINE.match?(lines[i])
+            i += 1
+            next
+          end
+
+          run_start = i
+          i += 1 while i < lines.length && COMMENT_INTENT_LINE.match?(lines[i])
+          run_end = i # exclusive; lines[run_end] is the line after the run
+
+          target = lines[run_end]
+          next if target.nil?
+          next unless GROUP_LINE.match?(target) || INVOCATION_LINE.match?(target)
+          # The exemption sees only the code before any trailing token, as in
+          # {group_line_findings_in_text}.
+          next if EXAMPLE_ON_LINE.match?(target.split("@intent:", 2).first)
+
+          (run_start...run_end).each do |j|
+            findings << Finding.new(file: file, line: j + 1, problem: UNREACHABLE_ABOVE_GROUP_ANNOTATION,
+                                    kind: Finding::KIND_UNREACHABLE)
+          end
+        end
+
+        findings
       end
     end
   end

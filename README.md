@@ -64,7 +64,7 @@ JSON Schema. Exits `1` on a malformed annotation — or a well-formed but unreac
 above another comment-form `@intent:` line, so the one-line lookback never claims it; separated
 from its example (`it`, `specify`, `xit`, `fit`, `example`, …) by one blank or ordinary comment line, which puts it out of the lookback's reach;
 directly above an example that carries its own trailing `@intent:`, which extraction prefers, so the
-comment is shadowed; or trailing on a `describe`/`context` group line, which no example's extraction can ever reach) — and
+comment is shadowed; trailing on a `describe`/`context` group line, which no example's extraction can ever reach; or directly above a `describe`/`context` group line or a shared-example invocation (`it_behaves_like`, `include_examples`, …), which no example can claim either) — and
 **never** fails on a *missing* one (adoption is opt-in and gradual).
 
 ```bash
@@ -83,8 +83,9 @@ zero-annotation coverage note counts only files you wrote — the same material
 directories`); a file named explicitly on the command line is always checked.
 
 Shared-example and helper files under `spec/**/support/` and `test/**/support/` match neither
-`*_spec.rb` nor `*_test.rb`, yet annotating a `shared_examples` group is the highest-leverage place to
-write an `@intent:` (one annotation covers every including file's rows), so both the default walk and
+`*_spec.rb` nor `*_test.rb`, yet annotating the `it` inside a `shared_examples` group is the highest-leverage place to
+write an `@intent:` (one annotation covers every including file's rows; a comment above the
+`shared_examples` header or an `it_behaves_like` line is unreachable and fails the lint), so both the default walk and
 `--changed` also select a `.rb` file in a `support` directory — but **only when it contains the
 `@intent:` token**. Support directories are full of unannotated helpers; those stay unselected, so they
 neither flood the `N of M checked spec/test files carry no @intent` note nor change any count for a
@@ -360,7 +361,7 @@ is not a verdict, or emits output that is not a report — is **exit 2**, the li
 my job" code. It never becomes exit 1, which means "an annotation is malformed" — or well-formed
 but unreachable: stacked above another comment-form `@intent:` line, so the one-line lookback
 never claims it, separated from its example by one blank or ordinary comment line, shadowed by its
-example's own trailing `@intent:`, or trailing on a `describe`/`context` group line, which no example's extraction can ever reach — and nothing else.
+example's own trailing `@intent:`, trailing on a `describe`/`context` group line, which no example's extraction can ever reach, or directly above a group line or shared-example invocation — and nothing else.
 
 ## The formatter — `SpecGuard::RSpecFormatter`
 

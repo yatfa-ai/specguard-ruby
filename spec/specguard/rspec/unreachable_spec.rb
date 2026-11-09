@@ -244,21 +244,6 @@ RSpec.describe SpecGuard::Client::Scanner do
       expect(findings(text)).to be_empty
     end
 
-    # @intent: { entity: "Scanner", action: "spare comment forms", behavior: "a comment-form annotation directly above a group line is out of scope and unflagged", layer: "unit" }
-    it "does not flag a comment-form annotation above a group line" do
-      # SPGD-1510 flags the group line ITSELF. A comment above a group is a
-      # different shape, deliberately out of scope — the same boundary the
-      # stacked pass draws for a comment above a trailing-form line.
-      text = <<~RUBY
-        # @intent: { entity: "A", behavior: "renders the thing it names", layer: "unit" }
-        describe "a group" do
-          it "works" do end
-        end
-      RUBY
-
-      expect(findings(text)).to be_empty
-    end
-
     # @intent: { entity: "Scanner", action: "merge the two passes", behavior: "stacked and group-line findings in one file come back merged in line order", layer: "unit" }
     it "merges stacked and group-line findings in line order" do
       text = <<~RUBY
@@ -279,6 +264,150 @@ RSpec.describe SpecGuard::Client::Scanner do
 
       expect(findings(text).first.problem).to include("attach to examples, never to groups")
       expect(findings(text).first.problem).to include("directly above")
+    end
+  end
+
+  describe ".unreachable_findings_in_text (SPGD-2137: the comment-run-above-a-group pass)" do
+    def findings(text)
+      described_class.unreachable_findings_in_text(text, file: "order_spec.rb")
+    end
+
+    def annotation
+      '# @intent: { entity: "Cart", behavior: "totals the items" }'
+    end
+
+    # @intent: { entity: "Scanner", action: "detect annotations above groups", behavior: "a comment-form annotation directly above a describe or context line is flagged on the annotation line with kind unreachable", layer: "unit" }
+    it "flags a comment-form annotation directly above a describe or context line" do
+      text = <<~RUBY
+        #{annotation}
+        RSpec.describe "Cart" do
+          #{annotation}
+          context "inner" do
+            it "works" do end
+          end
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1, 3])
+      expect(findings(text).map(&:kind).uniq).to eq([SpecGuard::Client::Finding::KIND_UNREACHABLE])
+      expect(findings(text).map(&:problem).uniq).to eq([described_class::UNREACHABLE_ABOVE_GROUP_ANNOTATION])
+    end
+
+    # @intent: { entity: "Scanner", action: "detect annotations above shared groups", behavior: "a comment-form annotation directly above a shared_examples, shared_examples_for or shared_context header is flagged", layer: "unit" }
+    it "flags a comment-form annotation directly above a shared-example header" do
+      text = <<~RUBY
+        #{annotation}
+        RSpec.shared_examples "settles" do
+          it "settles" do end
+        end
+        #{annotation}
+        shared_examples_for "pays" do
+          it "pays" do end
+        end
+        #{annotation}
+        shared_context "logged in" do
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1, 5, 9])
+    end
+
+    # @intent: { entity: "Scanner", action: "detect annotations above invocations", behavior: "a comment-form annotation directly above it_behaves_like, it_should_behave_like, include_examples or include_context is flagged", layer: "unit" }
+    it "flags a comment-form annotation directly above a shared-example invocation" do
+      text = <<~RUBY
+        describe "Cart" do
+          #{annotation}
+          it_behaves_like "pays"
+          #{annotation}
+          it_should_behave_like "pays"
+          #{annotation}
+          include_examples "pays"
+          #{annotation}
+          include_context "logged in"
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([2, 4, 6, 8])
+    end
+
+    # @intent: { entity: "Scanner", action: "flag every dead line", behavior: "every line of a multi-line comment run directly above a group is flagged, the run's last line included", layer: "unit" }
+    it "flags every line of a run above a group" do
+      text = <<~RUBY
+        #{annotation}
+        #{annotation}
+        describe "Cart" do
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1, 2])
+    end
+
+    # @intent: { entity: "Scanner", action: "spare examples", behavior: "the same annotation directly above a plain it is the canonical claimed form and is not flagged", layer: "unit" }
+    it "does not flag the same annotation directly above a plain it" do
+      text = <<~RUBY
+        describe "Cart" do
+          #{annotation}
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "spare one-liner groups", behavior: "a one-liner group that defines its example on the group line is that example's own line, so the comment above it is claimed and not flagged", layer: "unit" }
+    it "does not flag a comment above the one-liner group form" do
+      text = <<~RUBY
+        #{annotation}
+        describe "x" do it("y") { } end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "bound the run", behavior: "a blank line or ordinary comment between the annotation run and the group line takes the annotation out of this pass", layer: "unit" }
+    it "does not flag when a blank line separates the run from the group line" do
+      text = <<~RUBY
+        #{annotation}
+
+        describe "Cart" do
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "ignore look-alike words", behavior: "a line merely starting with a word that begins like a group or invocation keyword is not a group line", layer: "unit" }
+    it "does not flag a comment above a line whose first word only resembles a group keyword" do
+      text = <<~RUBY
+        #{annotation}
+        describe_cart_helper "x"
+        #{annotation}
+        include_examples_for_cart
+      RUBY
+
+      expect(findings(text)).to be_empty
+    end
+
+    # @intent: { entity: "Scanner", action: "report once", behavior: "a run above a group line that itself carries a trailing annotation yields one finding per dead line, the run's and the group line's, never a duplicate", layer: "unit" }
+    it "reports each dead line once when the group line also carries a trailing annotation" do
+      text = <<~RUBY
+        #{annotation}
+        describe "Cart" do # @intent: { entity: "Cart", behavior: "totals the items" }
+          it "works" do end
+        end
+      RUBY
+
+      expect(findings(text).map(&:line)).to eq([1, 2])
+    end
+
+    # @intent: { entity: "Scanner", action: "word the finding", behavior: "the above-group finding names why it is unreachable and where the annotation belongs", layer: "unit" }
+    it "carries a problem sentence naming examples, not groups" do
+      text = "#{annotation}\ndescribe \"Cart\" do\n  it \"works\" do end\nend\n"
+
+      expect(findings(text).first.problem).to include("attach to examples, never to groups")
+      expect(findings(text).first.problem).to include("inside the group")
     end
   end
 
@@ -499,7 +628,16 @@ RSpec.describe SpecGuard::Client::Scanner do
       it "does not anchor on #{label}" do
         [stacked, separated].each do |build|
           text = build.call("it").sub(/^it .*$/, line)
-          expect(findings(text)).to be_empty
+          if label == "example_group"
+            # example_group IS a group keyword, so the above-group arm
+            # legitimately owns a comment run directly above it; only the
+            # example-anchored stacked/separated arms are asserted off it.
+            expect(findings(text).map(&:problem)).not_to include(
+              described_class::UNREACHABLE_ANNOTATION, described_class::UNREACHABLE_SEPARATED_ANNOTATION
+            )
+          else
+            expect(findings(text)).to be_empty
+          end
         end
         # example_group IS a group keyword, so the group arm legitimately owns
         # its trailing-annotation shape; only the shadow arm is asserted off it.
