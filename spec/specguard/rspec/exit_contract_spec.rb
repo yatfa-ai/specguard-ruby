@@ -51,7 +51,7 @@ RSpec.describe "the specguard-lint exit contract" do
         Dir.chdir(dir) { expect(cli.run([])).to eq(0) }
       end
 
-      expect(err).to include("selected 0 spec files")
+      expect(err).to include("selected 0 spec/test files")
     end
   end
 

@@ -117,7 +117,7 @@ end
 # Why a byte lock and not "the flag defaults to false, so it is inert"
 # ====================================================================
 # Adding `--json` did not only add a branch. It moved the leading
-# `checked N spec file(s)` line inside a conditional in `CLI#report_selection`,
+# `checked N spec/test file(s)` line inside a conditional in `CLI#report_selection`,
 # and it replaced `CLI#report_results`'s body with a partition shared by two
 # renderers. Both edits are on the default path, and both are the kind that
 # drifts by a space or a newline without any example noticing: the existing
@@ -178,7 +178,7 @@ RSpec.describe "the default output path, byte for byte" do
     stdout, stderr, code = run("spec/fixtures/order_spec.rb")
 
     expect(stdout).to eq(<<~OUT)
-      specguard-lint: checked 1 spec file
+      specguard-lint: checked 1 spec/test file
       specguard-lint: checked 7 @intent annotations, 0 malformed
     OUT
     expect(stderr).to eq(provenance)
@@ -190,7 +190,7 @@ RSpec.describe "the default output path, byte for byte" do
     stdout, stderr, code = run("spec/fixtures/order_spec.rb", "spec/fixtures/broken_intent_spec.rb")
 
     expect(stdout).to eq(<<~OUT)
-      specguard-lint: checked 2 spec files
+      specguard-lint: checked 2 spec/test files
       FAIL  spec/fixtures/broken_intent_spec.rb:9
               -> <root>: missing required property 'entity'
               -> <root>: additional property 'entiity' is not allowed
@@ -212,7 +212,7 @@ RSpec.describe "the default output path, byte for byte" do
     stdout, stderr, code = run("spec/fixtures/gone_spec.rb")
 
     expect(stdout).to eq(<<~OUT)
-      specguard-lint: checked 1 spec file
+      specguard-lint: checked 1 spec/test file
       FAIL  spec/fixtures/gone_spec.rb — could not read file: no file at this path
       specguard-lint: checked 0 @intent annotations, 0 malformed; 1 file could not be read
     OUT

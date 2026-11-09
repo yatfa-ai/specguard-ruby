@@ -112,7 +112,7 @@ module SpecGuard
 
       # @param results [Array<Linter::Result>] every verdict, in discovery order
       # @param files [Integer] spec files selected — the count the text path
-      #   states in its leading `checked N spec file(s)` line
+      #   states in its leading `checked N spec/test file(s)` line
       # @param annotations [Integer] annotation sites examined — the count the
       #   text path states in its trailing summary line
       # @param ok [Boolean] whether the run passed, derived from the exit code

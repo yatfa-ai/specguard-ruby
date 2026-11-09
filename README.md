@@ -59,7 +59,7 @@ See [Shipping the run to SpecGuard](#shipping-the-run-to-specguard) for the sett
 
 ## The linter — `specguard-lint`
 
-Validates `# @intent:` annotations in changed (or all) `*_spec.rb` files against the OpenTestIntent
+Validates `# @intent:` annotations in changed (or all) `*_spec.rb` / `*_test.rb` files — and the `spec/**/support/**/*.rb` / `test/**/support/**/*.rb` shared-example and helper files that carry an `@intent:` token — against the OpenTestIntent
 JSON Schema. Exits `1` on a malformed annotation — or a well-formed but unreachable one (stacked
 above another comment-form `@intent:` line, so the one-line lookback never claims it; separated
 from its example (`it`, `specify`, `xit`, `fit`, `example`, …) by one blank or ordinary comment line, which puts it out of the lookback's reach;
@@ -69,7 +69,7 @@ comment is shadowed; or trailing on a `describe`/`context` group line, which no 
 
 ```bash
 bundle exec specguard-lint --changed   # CI mode: only files in the current diff
-bundle exec specguard-lint             # one-off audit: every *_spec.rb outside dependency/build directories
+bundle exec specguard-lint             # one-off audit: every *_spec.rb / *_test.rb (plus support files carrying @intent:) outside dependency/build directories
 ```
 
 The default walk is fenced out of dependency and build directories — `node_modules`,
@@ -79,8 +79,17 @@ directory names, so `spec/vendor_helpers/` is still yours. A bundled Rails tree
 specs; the walk neither reports on them nor fails over their annotations, and the
 zero-annotation coverage note counts only files you wrote — the same material
 `--changed` fences out with the same directory list. When the fence removed files, the
-`checked N spec files` line says how many (`skipping M in dependency or build
+`checked N spec/test files` line says how many (`skipping M in dependency or build
 directories`); a file named explicitly on the command line is always checked.
+
+Shared-example and helper files under `spec/**/support/` and `test/**/support/` match neither
+`*_spec.rb` nor `*_test.rb`, yet annotating a `shared_examples` group is the highest-leverage place to
+write an `@intent:` (one annotation covers every including file's rows), so both the default walk and
+`--changed` also select a `.rb` file in a `support` directory — but **only when it contains the
+`@intent:` token**. Support directories are full of unannotated helpers; those stay unselected, so they
+neither flood the `N of M checked spec/test files carry no @intent` note nor change any count for a
+repository whose support files carry no annotations. The same dependency/build fence applies, and in
+`--changed` a token-carrying support file counts in the `changed spec/test files` figure like any other.
 
 `--changed` is the CI selection mode: it diffs against the **merge base with
 the default branch** (`origin/HEAD`, then `origin/main`/`origin/master`, then
@@ -94,7 +103,7 @@ or not the change is committed yet. One `git ls-files --others
 code, build output) out of the untracked leg alone — and untracked files obey
 the same scoping as diffed ones, so an
 untracked spec outside the current directory is counted as outside, not
-checked. When the untracked leg contributed, the `checked N spec files changed
+checked. When the untracked leg contributed, the `checked N spec/test files changed
 since <base>` line says `including M untracked`. `--changed` applies the same
 dependency/build directory fence to everything it selects: a tracked file is
 never subject to `.gitignore`, so the diff leg needs the fence regardless —
@@ -167,7 +176,7 @@ what a parser sees.
 | `schema`              | the OpenTestIntent schema version the payloads were validated against |
 | `mode`                | always `"source"` — annotations in spec sources, the port's name for what this tool does. Not the *selection* mode (`--changed` vs named files), which the document has no field for |
 | `ok`                  | whether the run passed — derived from the exit code, not recomputed, so the two renderers cannot disagree |
-| `summary.files`       | spec files selected: the number the text report's leading `checked N spec file(s)` line states |
+| `summary.files`       | spec files selected: the number the text report's leading `checked N spec/test file(s)` line states |
 | `summary.annotations` | annotation sites examined: the number its trailing summary line states. A site whose payload could not be captured or parsed still counts; a file that could not be read contributes none |
 | `summary.failed`      | findings with `"ok": false`, read failures included. Note this is **not** the text summary's `M malformed`, which counts malformed annotations and reports unread files in its own clause |
 
